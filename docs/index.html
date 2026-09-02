@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Reaction Wheel Rocking Sim</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">2D PHYSICS TESTBED</p>
+        <h1>Reaction Wheel Rocking Sim</h1>
+        <p class="lead">左右ロッキングだけに限定し、Qをエネルギーと仮定せずに運動方程式から入力効果を調べます。</p>
+      </div>
+      <div id="statusBadge" class="badge">READY</div>
+    </header>
+
+    <section class="grid-main">
+      <div class="panel visual-panel">
+        <div class="panel-head">
+          <div>
+            <h2>2D motion</h2>
+            <p>接地点追従表示。赤点がCG、黄色点が現在の支持点です。</p>
+          </div>
+          <div class="playback-controls">
+            <button id="restartBtn" type="button">↺</button>
+            <button id="playBtn" type="button">▶ 再生</button>
+            <select id="speedSelect" aria-label="再生速度">
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="motionCanvas" width="760" height="440"></canvas>
+        <div class="live-strip">
+          <span>t <strong id="liveT">0.000</strong> s</span>
+          <span>θ <strong id="liveTheta">0.00</strong>°</span>
+          <span>ω <strong id="liveOmega">0.0</strong>°/s</span>
+          <span>wheel <strong id="liveRpm">0</strong> rpm</span>
+          <span id="liveMode">double support</span>
+        </div>
+      </div>
+
+      <aside class="panel controls-panel">
+        <div class="panel-head compact">
+          <div>
+            <h2>Experiment</h2>
+            <p>最初のゼロクロスで1回だけQを投入します。</p>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <label>初期振幅 A₀ [deg]
+            <input id="initialDeg" type="number" value="8" min="0.5" max="17" step="0.5">
+          </label>
+          <label>目標次ピーク Aref [deg]
+            <input id="targetDeg" type="number" value="10" min="0.5" max="17" step="0.5">
+          </label>
+          <label>Q [mA·s]
+            <input id="qMas" type="number" value="1.0" min="0" max="4" step="0.1">
+          </label>
+          <label>電流 [mA]
+            <input id="currentMa" type="number" value="300" min="1" max="1000" step="10">
+          </label>
+          <label>入力作用
+            <select id="energyAction">
+              <option value="add" selected>揺動エネルギーを増やす向き</option>
+              <option value="remove">揺動エネルギーを減らす向き</option>
+            </select>
+          </label>
+          <label>シミュレーション [s]
+            <input id="simSeconds" type="number" value="6" min="1" max="15" step="1">
+          </label>
+        </div>
+
+        <details>
+          <summary>物理パラメータ</summary>
+          <div class="form-grid details-grid">
+            <label>質量 m [kg]
+              <input id="massKg" type="number" value="0.1997" min="0.01" max="5" step="0.0001">
+            </label>
+            <label>CG慣性 Icg [kg·m²]
+              <input id="icg" type="number" value="0.00055" min="0.000001" max="0.1" step="0.00001">
+            </label>
+            <label>粘性 c [N·m·s/rad]
+              <input id="viscous" type="number" value="0.00012" min="0" max="0.02" step="0.00001">
+            </label>
+            <label>クーロン摩擦 τc [N·m]
+              <input id="coulomb" type="number" value="0.00005" min="0" max="0.01" step="0.00001">
+            </label>
+            <label>モータ kt [N·m/A] <span class="provisional">仮値</span>
+              <input id="kt" type="number" value="0.05" min="0.0001" max="1" step="0.001">
+            </label>
+            <label>ホイール Jw [kg·m²]
+              <input id="jw" type="number" value="0.00008" min="0.000001" max="0.01" step="0.00001">
+            </label>
+            <label>ホイール上限 [rpm]
+              <input id="maxRpm" type="number" value="6000" min="100" max="50000" step="100">
+            </label>
+            <label>積分刻み dt [ms]
+              <input id="dtMs" type="number" value="0.2" min="0.02" max="2" step="0.02">
+            </label>
+          </div>
+        </details>
+
+        <div class="actions">
+          <button id="runBtn" class="primary" type="button">シミュレーション実行</button>
+          <button id="qSweepBtn" type="button">Q sweep</button>
+          <button id="stateSweepBtn" type="button">初期振幅 sweep</button>
+        </div>
+        <p id="validationMsg" class="validation" role="status"></p>
+      </aside>
+    </section>
+
+    <section class="metrics" aria-live="polite">
+      <article class="metric"><span>次ピーク (Qあり)</span><strong id="metricPeakQ">—</strong><small>deg</small></article>
+      <article class="metric"><span>次ピーク (Q=0)</span><strong id="metricPeak0">—</strong><small>deg</small></article>
+      <article class="metric emphasis"><span>ΔEobs(sim)</span><strong id="metricDeltaE">—</strong><small>mJ</small></article>
+      <article class="metric"><span>Q effective</span><strong id="metricQeff">—</strong><small>mA·s</small></article>
+      <article class="metric"><span>最大 wheel</span><strong id="metricWheel">—</strong><small>rpm</small></article>
+      <article class="metric"><span>目標との差</span><strong id="metricTargetErr">—</strong><small>deg</small></article>
+    </section>
+
+    <section class="grid-charts">
+      <div class="panel chart-panel">
+        <div class="panel-head compact">
+          <div>
+            <h2>Angle history</h2>
+            <p>実線: Qあり / 破線: 同一初期状態のQ=0</p>
+          </div>
+        </div>
+        <canvas id="timeChart" width="760" height="320"></canvas>
+      </div>
+      <div class="panel chart-panel">
+        <div class="panel-head compact">
+          <div>
+            <h2 id="sweepTitle">Input diagnostic</h2>
+            <p id="sweepSubtitle">Q sweep または初期振幅 sweep を実行してください。</p>
+          </div>
+        </div>
+        <canvas id="sweepChart" width="760" height="320"></canvas>
+        <div id="sweepSummary" class="sweep-summary"></div>
+      </div>
+    </section>
+
+    <section class="panel interpretation">
+      <h2>この版での判定の仕方</h2>
+      <div class="interpret-grid">
+        <div><strong>① Q sweep</strong><p>固定したゼロクロス状態で Q→ΔEobs が単調・再現的かを見る。</p></div>
+        <div><strong>② 状態 sweep</strong><p>同じQでも初期振幅、つまり入力時角速度が変わると ΔEobs が変わるかを見る。</p></div>
+        <div><strong>③ 限界</strong><p>17.46°の足裏円弧範囲やホイール回転数上限に当たれば、その条件は現モデルの実現可能域外。</p></div>
+      </div>
+      <p class="note">同じQでΔEobsが変わっても「エネルギー制御が不可能」とは限りません。その場合は Q 単独ではなく <code>ΔEobs=f(Q, state)</code> が必要という判定です。</p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
