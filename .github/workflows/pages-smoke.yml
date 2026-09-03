@@ -1,13 +1,11 @@
 name: Pages browser smoke test
 
 on:
-  workflow_run:
-    workflows: ["pages build and deployment"]
-    types: [completed]
+  push:
+    branches: [main]
 
 jobs:
   browser-smoke:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -17,6 +15,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Wait for deployed Pages to expose latest asset version
+        run: |
+          set -e
+          URL='https://temesotejam.github.io/reaction-wheel-rocking-sim/'
+          for i in $(seq 1 30); do
+            html=$(curl -fsSL "$URL" || true)
+            if echo "$html" | grep -q 'app.js?v=20260903-2'; then
+              echo "Latest Pages HTML detected on attempt $i"
+              exit 0
+            fi
+            echo "Waiting for latest Pages HTML... attempt $i"
+            sleep 5
+          done
+          echo "Latest Pages HTML was not observed"
+          exit 1
 
       - name: Install Playwright
         run: |
@@ -47,13 +61,10 @@ jobs:
             await page.locator('#playBtn').click();
             await page.waitForTimeout(1500);
             const t1 = parseFloat(await page.locator('#liveT').textContent());
-            const theta1 = await page.locator('#liveTheta').textContent();
-            const cmd1 = await page.locator('#liveICmd').textContent();
-            const actual1 = await page.locator('#liveIActual').textContent();
             console.log('AFTER_1P5S_T', t1);
-            console.log('AFTER_1P5S_THETA', theta1);
-            console.log('AFTER_1P5S_ICMD', cmd1);
-            console.log('AFTER_1P5S_IACTUAL', actual1);
+            console.log('AFTER_1P5S_THETA', await page.locator('#liveTheta').textContent());
+            console.log('AFTER_1P5S_ICMD', await page.locator('#liveICmd').textContent());
+            console.log('AFTER_1P5S_IACTUAL', await page.locator('#liveIActual').textContent());
             console.log('BUTTON_AFTER', await page.locator('#playBtn').textContent());
             if (errors.length) throw new Error('Page errors: ' + errors.join(' | '));
             if (!(t1 > 0.5)) throw new Error('Playback did not advance: liveT=' + t1);
