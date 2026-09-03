@@ -12,14 +12,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Wait for deployed v7 Pages
+      - name: Wait for deployed v8 Pages
         run: |
           set -e
           URL='https://temesotejam.github.io/reaction-wheel-rocking-sim/'
           for i in $(seq 1 40); do
             html=$(curl -fsSL "$URL" || true)
-            if echo "$html" | grep -q 'app.js?v=20260903-7'; then
-              echo "v7 Pages detected on attempt $i"
+            if echo "$html" | grep -q 'app.js?v=20260903-8'; then
+              echo "v8 Pages detected on attempt $i"
               exit 0
             fi
             sleep 5
@@ -30,7 +30,7 @@ jobs:
           npm init -y
           npm install playwright
           npx playwright install chromium
-      - name: Exercise direct one-shot mode in Chromium
+      - name: Exercise normal target tracking in Chromium
         run: |
           node <<'NODE'
           const { chromium } = require('playwright');
@@ -42,34 +42,31 @@ jobs:
             const response = await page.goto('https://temesotejam.github.io/reaction-wheel-rocking-sim/', {waitUntil:'networkidle',timeout:120000});
             console.log('HTTP', response && response.status());
             const script = await page.locator('script[src]').getAttribute('src');
-            const mode = await page.locator('#controlMode').inputValue();
             console.log('SCRIPT', script);
-            console.log('MODE', mode);
             console.log('STATUS', await page.locator('#statusBadge').textContent());
-            if (script !== 'app.js?v=20260903-7') throw new Error('Wrong app asset version');
-            if (mode !== 'direct_one_shot') throw new Error('Direct one-shot is not default');
+            if (script !== 'app.js?v=20260903-8') throw new Error('Wrong app asset version');
+            if ((await page.locator('#controlMode').count()) !== 0) throw new Error('Special control-mode selector should not exist');
 
             const rows = await page.locator('#eventBody tr').evaluateAll(rs => rs.map(r => [...r.querySelectorAll('td')].map(td => td.textContent.trim())));
             if (!rows.length) throw new Error('No half-cycle decisions');
             const nonzero = rows.filter(r => parseFloat(r[8]) > 1e-6);
+            const completed = rows.filter(r => r[11] && r[11] !== '—');
+            if (!completed.length) throw new Error('No completed controlled peaks');
+            const actuals = completed.map(r => parseFloat(r[11])).filter(Number.isFinite);
+            const maxActual = Math.max(...actuals);
+            const first = completed[0];
+            const last = completed[completed.length-1];
+            const firstActual = parseFloat(first[11]);
+            const lastActual = parseFloat(last[11]);
             console.log('EVENT_COUNT', rows.length);
             console.log('NONZERO_Q_EVENTS', nonzero.length);
-            console.log('FIRST_EVENT', JSON.stringify(rows[0]));
-            if (rows[1]) console.log('SECOND_EVENT', JSON.stringify(rows[1]));
-            if (nonzero.length !== 1) throw new Error('Direct one-shot should issue exactly one nonzero Q event');
-            const firstQ = parseFloat(rows[0][8]);
-            const firstActual = parseFloat(rows[0][11]);
-            const firstError = parseFloat(rows[0][12]);
-            console.log('FIRST_QCMD', firstQ);
-            console.log('FIRST_ACTUAL_PEAK', firstActual);
-            console.log('FIRST_ERROR', firstError);
-            if (!(firstQ > 1.197)) throw new Error('Expected first direct request to be above identified Q range');
-            if (!(firstActual > 0.4 && firstActual < 1.5)) throw new Error('Unexpected first one-shot peak');
-            if (!(firstError > 0.5)) throw new Error('One-shot unexpectedly reached target with current model');
-            if (rows.length > 1 && parseFloat(rows[1][8]) !== 0) throw new Error('Second zero-cross must be passive Q=0');
-
-            const peakRows = rows.filter(r => r[11] && r[11] !== '—');
-            console.log('LAST_COMPLETED_EVENT', peakRows.length ? JSON.stringify(peakRows[peakRows.length-1]) : 'none');
+            console.log('FIRST_COMPLETED_EVENT', JSON.stringify(first));
+            console.log('LAST_COMPLETED_EVENT', JSON.stringify(last));
+            console.log('MAX_ACTUAL_PEAK', maxActual);
+            if (!(nonzero.length >= 3)) throw new Error('Normal target tracking did not keep correcting after the first half-cycle');
+            if (!(maxActual > 1.8)) throw new Error('Target-tracking law did not naturally build amplitude toward 2 deg');
+            if (!(Math.abs(lastActual - 2.0) < 0.10)) throw new Error('Final completed peak is not close to 2 deg target');
+            if (!(lastActual > firstActual)) throw new Error('Amplitude did not grow from the first controlled peak');
 
             await page.locator('#playBtn').click();
             await page.waitForTimeout(1500);
