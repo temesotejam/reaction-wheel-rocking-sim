@@ -321,12 +321,44 @@
     return { x: -p.radius * Math.sin(theta), z: p.hC0 - p.radius * Math.cos(theta) };
   }
 
+  // World pose of the body origin in a floor-fixed coordinate system.
+  // At theta=0, the body origin is x=0 and the two inner edges touch the floor
+  // at x=+-innerX. In the central gap region the supporting inner edge is a
+  // fixed pivot. Once circular contact starts, no-slip rolling advances the
+  // contact point along the floor by the arc length R * Delta theta.
+  function bodyPose(theta, p) {
+    const mag = Math.abs(theta);
+    if (mag < 1e-9) return { x: 0, z: 0, contactX: 0 };
+
+    const side = Math.sign(theta);
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
+
+    if (mag < p.thetaInner) {
+      const pivotBodyX = side > 0 ? -p.innerX : p.innerX;
+      const pivotWorldX = pivotBodyX;
+      return {
+        x: pivotWorldX - c * pivotBodyX,
+        z: -s * pivotBodyX,
+        contactX: pivotWorldX
+      };
+    }
+
+    const contactWorldX = -side * (p.innerX + p.radius * (mag - p.thetaInner));
+    return {
+      x: contactWorldX + p.hC0 * s,
+      z: p.radius - p.hC0 * c,
+      contactX: contactWorldX
+    };
+  }
+
   function transformBodyPoint(x, z, theta, p) {
-    const cpt = bodyContactPoint(theta, p);
-    const dx = x - cpt.x;
-    const dz = z - cpt.z;
+    const pose = bodyPose(theta, p);
     const c = Math.cos(theta), s = Math.sin(theta);
-    return { x: c * dx - s * dz, z: s * dx + c * dz };
+    return {
+      x: pose.x + c * x - s * z,
+      z: pose.z + s * x + c * z
+    };
   }
 
   function drawMotion(sample, p) {
@@ -351,6 +383,14 @@
     for (let x = 40; x < w - 30; x += 40) {
       ctx.beginPath(); ctx.moveTo(x, groundY + 1); ctx.lineTo(x - 13, groundY + 12); ctx.stroke();
     }
+
+    // Fixed world-origin marker: this does not move with the body.
+    ctx.strokeStyle = "#556474";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(originX, groundY - 8);
+    ctx.lineTo(originX, groundY + 8);
+    ctx.stroke();
 
     const theta = sample.theta;
     function wp(x, z) {
@@ -407,7 +447,18 @@
     ctx.beginPath(); ctx.arc(cg.x, cg.y, 7, 0, TWO_PI); ctx.fillStyle = "#ff6b6b"; ctx.fill();
     ctx.fillStyle = "#ff9b9b"; ctx.font = "12px system-ui"; ctx.fillText("CG", cg.x + 10, cg.y - 8);
 
-    ctx.beginPath(); ctx.arc(originX, groundY, 6, 0, TWO_PI); ctx.fillStyle = "#ffd166"; ctx.fill();
+    // Show the actual support/contact location on the fixed floor.
+    ctx.fillStyle = "#ffd166";
+    if (Math.abs(theta) < 1e-9) {
+      const qL = wp(-p.innerX, 0);
+      const qR = wp(p.innerX, 0);
+      ctx.beginPath(); ctx.arc(qL.x, qL.y, 5, 0, TWO_PI); ctx.fill();
+      ctx.beginPath(); ctx.arc(qR.x, qR.y, 5, 0, TWO_PI); ctx.fill();
+    } else {
+      const cpt = bodyContactPoint(theta, p);
+      const cq = wp(cpt.x, cpt.z);
+      ctx.beginPath(); ctx.arc(cq.x, cq.y, 6, 0, TWO_PI); ctx.fill();
+    }
 
     ctx.fillStyle = "#dce7f2";
     ctx.font = "600 15px system-ui";
