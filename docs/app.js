@@ -314,6 +314,55 @@
     return "モデル範囲外";
   }
 
+  function wheelDirLabel(w) {
+    if (w > 1e-3) return "CCW";
+    if (w < -1e-3) return "CW";
+    return "STOP";
+  }
+
+  function torqueDirLabel(tau) {
+    if (tau > 1e-7) return "CCW";
+    if (tau < -1e-7) return "CW";
+    return "OFF";
+  }
+
+  function drawRotationArrow(ctx, cx, cy, r, dir, color, width = 3) {
+    if (!dir) return;
+    const start = dir > 0 ? -0.55 : 0.55;
+    const span = dir * 1.85;
+    const n = 30;
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const a = start + span * i / n;
+      const x = cx + r * Math.cos(a);
+      const y = cy - r * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    const a = start + span;
+    const tipX = cx + r * Math.cos(a);
+    const tipY = cy - r * Math.sin(a);
+    const tx = -Math.sin(a) * dir;
+    const ty = -Math.cos(a) * dir;
+    const nx = -ty;
+    const ny = tx;
+    const len = 10;
+    const half = 5;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - tx * len + nx * half, tipY - ty * len + ny * half);
+    ctx.lineTo(tipX - tx * len - nx * half, tipY - ty * len - ny * half);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+  }
+
   function bodyContactPoint(theta, p) {
     const mag = Math.abs(theta);
     if (mag < 1e-9) return { x: 0, z: 0 };
@@ -431,17 +480,29 @@
 
     const wheelC = wp(0, 0.150);
     const wheelR = 0.032 * scale;
+    const pulseOn = Math.abs(sample.tau) > 1e-10;
+    const wheelDir = wheelDirLabel(sample.wheelOmega);
+    const wheelDirSign = sample.wheelOmega > 1e-3 ? 1 : (sample.wheelOmega < -1e-3 ? -1 : 0);
+    const bodyTorque = -sample.tau;
+    const bodyTorqueDir = torqueDirLabel(bodyTorque);
+    const bodyTorqueSign = bodyTorque > 1e-7 ? 1 : (bodyTorque < -1e-7 ? -1 : 0);
+    const wheelRpmAbs = Math.abs(rpmFromRadS(sample.wheelOmega));
+
     ctx.beginPath(); ctx.arc(wheelC.x, wheelC.y, wheelR, 0, TWO_PI);
     ctx.fillStyle = "#19232e"; ctx.fill();
-    ctx.strokeStyle = "#68a8ff"; ctx.lineWidth = 4; ctx.stroke();
-    for (let k = 0; k < 4; k++) {
-      const a = sample.wheelAngle + k * Math.PI / 2;
+    ctx.strokeStyle = pulseOn ? "#7ee0b8" : "#68a8ff"; ctx.lineWidth = 4; ctx.stroke();
+    for (let k = 0; k < 6; k++) {
+      const a = sample.wheelAngle + k * TWO_PI / 6;
       ctx.beginPath();
       ctx.moveTo(wheelC.x, wheelC.y);
       ctx.lineTo(wheelC.x + Math.cos(a) * wheelR * 0.85, wheelC.y - Math.sin(a) * wheelR * 0.85);
-      ctx.strokeStyle = "#4f80b5"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = pulseOn ? "#9debc9" : "#4f80b5"; ctx.lineWidth = 2; ctx.stroke();
     }
     ctx.beginPath(); ctx.arc(wheelC.x, wheelC.y, 5, 0, TWO_PI); ctx.fillStyle = "#d7e8fb"; ctx.fill();
+
+    if (wheelDirSign) {
+      drawRotationArrow(ctx, wheelC.x, wheelC.y, wheelR + 14, wheelDirSign, wheelDirSign > 0 ? "#7ee0b8" : "#ffb86b", 3);
+    }
 
     const cg = wp(0, p.h);
     ctx.beginPath(); ctx.arc(cg.x, cg.y, 7, 0, TWO_PI); ctx.fillStyle = "#ff6b6b"; ctx.fill();
@@ -460,16 +521,49 @@
       ctx.beginPath(); ctx.arc(cq.x, cq.y, 6, 0, TWO_PI); ctx.fill();
     }
 
+    if (pulseOn && bodyTorqueSign) {
+      const tc = wp(0, 0.105);
+      drawRotationArrow(ctx, tc.x, tc.y, 18, bodyTorqueSign, "#ff6b6b", 2.5);
+      ctx.fillStyle = "#ff9b9b";
+      ctx.font = "11px system-ui";
+      ctx.fillText("body torque", tc.x + 22, tc.y - 12);
+    }
+
     ctx.fillStyle = "#dce7f2";
     ctx.font = "600 15px system-ui";
     ctx.fillText(`${(theta * RAD2DEG).toFixed(2)}°`, 20, 28);
     ctx.fillStyle = "#91a0b1";
     ctx.font = "12px system-ui";
     ctx.fillText(prettyMode(sample.mode), 20, 48);
-    if (Math.abs(sample.tau) > 0) {
-      ctx.fillStyle = "#7ee0b8";
-      ctx.fillText(`PULSE  Q=${sample.qEffective.toFixed(3)} mA·s`, 20, 70);
-    }
+    ctx.fillStyle = pulseOn ? "#7ee0b8" : "#708090";
+    ctx.fillText(pulseOn ? `PULSE ON  Q=${sample.qEffective.toFixed(3)} mA·s` : "PULSE OFF", 20, 70);
+
+    const panelW = 174;
+    const panelH = 108;
+    const panelX = w - panelW - 18;
+    const panelY = 16;
+    ctx.fillStyle = "rgba(17, 24, 32, 0.90)";
+    ctx.strokeStyle = "#33404e";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") ctx.roundRect(panelX, panelY, panelW, panelH, 10);
+    else ctx.rect(panelX, panelY, panelW, panelH);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#9fb0c1";
+    ctx.font = "12px system-ui";
+    ctx.fillText("REACTION WHEEL", panelX + 12, panelY + 18);
+    ctx.fillStyle = "#e7f1fb";
+    ctx.font = "700 24px system-ui";
+    ctx.fillText(`${wheelRpmAbs.toFixed(0)} rpm`, panelX + 12, panelY + 47);
+    ctx.font = "12px system-ui";
+    ctx.fillStyle = wheelDir === "STOP" ? "#9fb0c1" : (wheelDir === "CCW" ? "#7ee0b8" : "#ffb86b");
+    ctx.fillText(`wheel dir : ${wheelDir}`, panelX + 12, panelY + 68);
+    ctx.fillStyle = pulseOn ? "#ff9b9b" : "#9fb0c1";
+    ctx.fillText(`body torque : ${bodyTorqueDir}`, panelX + 12, panelY + 86);
+    ctx.fillStyle = pulseOn ? "#7ee0b8" : "#708090";
+    ctx.fillText(`pulse : ${pulseOn ? "ON" : "OFF"}`, panelX + 12, panelY + 103);
   }
 
   function chartAxes(ctx, w, h, xMin, xMax, yMin, yMax, xLabel, yLabel) {
