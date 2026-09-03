@@ -16,7 +16,7 @@
   const els = {};
   [
     "statusBadge","motionCanvas","historyCanvas","playBtn","restartBtn","speedSelect","runBtn",
-    "controlMode","initialPeakDeg","targetDeg","currentMa","peakDeadbandDeg","simSeconds",
+    "initialPeakDeg","targetDeg","currentMa","peakDeadbandDeg","simSeconds",
     "gPlus","gMinus","qModelMinMas","qModelMaxMas","kiMasPerDeg","iLimitMas","predLossPlus","predLossMinus",
     "tauFallMs","kt","jw","maxRpm","massKg","ieff","viscous","coulomb","dtMs","validationMsg",
     "liveT","liveControl","liveTheta","liveOmega","livePeak","liveNextSide","liveAFree","liveARef","liveDeltaE",
@@ -77,7 +77,6 @@
 
   function readParams() {
     const p = {
-      controlMode: els.controlMode ? els.controlMode.value : "direct_one_shot",
       initialPeakDeg: Math.max(0.01, finiteOr(parseFloat(els.initialPeakDeg.value), 0.8)),
       targetDeg: Math.max(0.01, finiteOr(parseFloat(els.targetDeg.value), 2.0)),
       currentMa: Math.max(1, finiteOr(parseFloat(els.currentMa.value), 300)),
@@ -296,7 +295,6 @@
     let lastPeakSide = +1;
     let currentDecision = null;
     let pendingEvent = null;
-    let oneShotIssued = false;
     let saturated = false, invalid = false, modelExtrapolated = false;
     const state = { iPlus: 0, iMinus: 0 };
     const events = [], peaks = [{ index:1, t:0, side:+1, ampDeg:lastPeakDeg }], samples = [];
@@ -309,7 +307,7 @@
         iPlus: state.iPlus, iMinus: state.iMinus,
         controlState: "COAST", nextSide: 0, Afree: NaN, deltaE: 0, qFF: 0, qCmd: 0,
         modelSupported: true, wheelQHeadroom: Infinity,
-        decisionText: p.controlMode === "direct_one_shot" ? "START_KICK後の最初のピークを使用。最初のzero-crossで目標Qを1回だけ投入します。" : "最初のピークを現在状態として使用", mode: contactMode(theta,p)
+        decisionText: "START_KICK後の最初の実ピークを現在状態として使用。以後は通常の目標追従閉ループです。", mode: contactMode(theta,p)
       };
       if (currentDecision) {
         Object.assign(s, {
@@ -369,13 +367,7 @@
         lastPeakSide = side;
         peaks.push({ index:peakCount, t, side, ampDeg:amp });
         if (pendingEvent && pendingEvent.nextSide === side && pendingEvent.actualPeakDeg == null) {
-          if (p.controlMode === "direct_one_shot") {
-            pendingEvent.actualPeakDeg = amp;
-            pendingEvent.peakErrorDeg = p.targetDeg - amp;
-            pendingEvent.iAfter = 0;
-          } else {
-            updateIntegralAfterPeak(pendingEvent, amp, state, p);
-          }
+          updateIntegralAfterPeak(pendingEvent, amp, state, p);
           pendingEvent = null;
         }
         currentDecision = null;
@@ -387,23 +379,10 @@
         const nextSide = Math.sign(omega) || -lastPeakSide;
         const Afree = freePredict(lastPeakDeg, nextSide, p);
         const ff = qFeedForward(Afree, nextSide, p);
-        const directMode = p.controlMode === "direct_one_shot";
-        const iSide = directMode ? 0 : iForSide(nextSide, state);
+        const iSide = iForSide(nextSide, state);
         let qCmd = 0;
-        let action = "PASSIVE";
-        if (directMode) {
-          if (!oneShotIssued) {
-            if (Afree < p.targetDeg - p.peakDeadbandDeg) qCmd = Math.max(0, ff.qFF);
-            oneShotIssued = true;
-            action = qCmd > 0 ? "DIRECT_ONE_SHOT" : "DIRECT_ONE_SHOT_NO_INPUT";
-          } else {
-            qCmd = 0;
-            action = "PASSIVE_AFTER_ONE_SHOT";
-          }
-        } else {
-          if (Afree < p.targetDeg - p.peakDeadbandDeg) qCmd = Math.max(0, ff.qFF + iSide);
-          action = qCmd > 0 ? "CLOSED_LOOP_INPUT" : "CLOSED_LOOP_HOLD";
-        }
+        if (Afree < p.targetDeg - p.peakDeadbandDeg) qCmd = Math.max(0, ff.qFF + iSide);
+        const action = qCmd > 0 ? "TARGET_TRACK_INPUT" : "TARGET_TRACK_HOLD";
         const commandMa = qCmd > 0 ? -Math.sign(omega || nextSide) * p.currentMa : 0;
         const signedQ = Math.sign(commandMa) * qCmd;
         const pulseWidth = qCmd > 0 ? solvePulseWidthForSignedQ(signedQ, currentActualMa, commandMa, p.tauFall) : 0;
@@ -414,7 +393,7 @@
         const event = {
           index: zcCount, t, nextSide, Ak:lastPeakDeg, Afree, deltaEMj:ff.deltaE*1000,
           qFF:ff.qFF, iUsed:iSide, qCmd, pulseWidthMs:pulseWidth*1000,
-          action, controlMode:p.controlMode,
+          action,
           modelSupported, wheelQHeadroom, wheelFeasible, actuatorLimited:false,
           actualPeakDeg:null, peakErrorDeg:null, iAfter:null
         };
@@ -422,13 +401,9 @@
         pendingEvent = event;
         currentDecision = {
           ...event,
-          text: directMode
-            ? (qCmd > 0
-                ? `DIRECT ONE-SHOT: ZC #${zcCount}: Aₖ=${lastPeakDeg.toFixed(3)}° → Afree=${Afree.toFixed(3)}° → 目標${p.targetDeg.toFixed(3)}°へ Qdirect=${qCmd.toFixed(3)} mA·s を1回だけ投入${modelSupported ? "" : " [gモデル外挿]"}${wheelFeasible ? "" : " [RW回転数能力超過]"}`
-                : `DIRECT ONE-SHOT投入済み。ZC #${zcCount}以降は不足していてもQ=0で自由減衰`)
-            : (qCmd > 0
-                ? `ZC #${zcCount}: Aₖ=${lastPeakDeg.toFixed(3)}° → Afree=${Afree.toFixed(3)}° → Qff=${ff.qFF.toFixed(3)} + I${sideText(nextSide)}=${iSide.toFixed(3)} → Qcmd=${qCmd.toFixed(3)} mA·s${modelSupported ? "" : " [gモデル外挿]"}${wheelFeasible ? "" : " [RW回転数能力超過]"}`
-                : `ZC #${zcCount}: Afree=${Afree.toFixed(3)}°。目標${p.targetDeg.toFixed(3)}°以上/不感帯内なのでQ=0（ブレーキなし）`)
+          text: qCmd > 0
+            ? `ZC #${zcCount}: Aₖ=${lastPeakDeg.toFixed(3)}° → Afree=${Afree.toFixed(3)}° → 目標${p.targetDeg.toFixed(3)}°へ Qff=${ff.qFF.toFixed(3)} + I${sideText(nextSide)}=${iSide.toFixed(3)} → Qcmd=${qCmd.toFixed(3)} mA·s${modelSupported ? "" : " [gモデル外挿]"}${wheelFeasible ? "" : " [RW回転数能力超過]"}`
+            : `ZC #${zcCount}: Afree=${Afree.toFixed(3)}°。目標${p.targetDeg.toFixed(3)}°以上/不感帯内なのでQ=0（ブレーキなし）`
         };
         if (qCmd > 0 && pulseWidth > 0) {
           activePulse = { start:t, end:t+pulseWidth, commandMa, qCmd };
@@ -441,7 +416,7 @@
       lastTheta = theta; lastOmega = omega;
     }
 
-    return { samples, events, peaks, saturated, invalid, modelExtrapolated, controlMode:p.controlMode };
+    return { samples, events, peaks, saturated, invalid, modelExtrapolated };
   }
 
   function drawRotationArrow(ctx,cx,cy,r,dir,color,width=3) {
@@ -530,7 +505,7 @@
 
   function sampleAtTime(samples,t) {if(!samples.length)return null;if(t<=samples[0].t)return samples[0];if(t>=samples[samples.length-1].t)return samples[samples.length-1];let lo=0,hi=samples.length-1;while(hi-lo>1){const mid=(lo+hi)>>1;if(samples[mid].t<t)lo=mid;else hi=mid;}return Math.abs(samples[lo].t-t)<Math.abs(samples[hi].t-t)?samples[lo]:samples[hi];}
 
-  function setStatus(run) {let text=run.controlMode === "direct_one_shot" ? "DIRECT ONE-SHOT" : "PEAK MODEL CONTROL",color="#7ee0b8";if(run.invalid){text+=" / MODEL LIMIT";color="#ff7474";}else if(run.saturated){text+=" / WHEEL LIMIT";color="#ffd166";}else if(run.modelExtrapolated){text+=" / MODEL EXTRAPOLATION";color="#ffd166";}els.statusBadge.textContent=text;els.statusBadge.style.color=color;els.statusBadge.style.borderColor=color;}
+  function setStatus(run) {let text="START KICK → TARGET TRACK",color="#7ee0b8";if(run.invalid){text+=" / MODEL LIMIT";color="#ff7474";}else if(run.saturated){text+=" / WHEEL LIMIT";color="#ffd166";}else if(run.modelExtrapolated){text+=" / MODEL EXTRAPOLATION";color="#ffd166";}els.statusBadge.textContent=text;els.statusBadge.style.color=color;els.statusBadge.style.borderColor=color;}
   function renderAt(t){if(!activeRun||!activeParams)return;const s=sampleAtTime(activeRun.samples,t);drawMotion(s,activeParams);updateLive(s,activeParams);drawHistory(activeRun,t,activeParams);renderEvents(activeRun.events);}
   function runMain(){const p=readParams(),msgs=validateParams(p);els.validationMsg.textContent=msgs.join(" ");if(msgs.some(m=>m.startsWith("最初のピーク")||m.startsWith("目標ピーク")))return;activeParams=p;activeRun=simulatePeakController(p);playbackTime=0;playing=false;els.playBtn.textContent="▶ 再生";setStatus(activeRun);renderAt(0);}
   function animate(ts){if(!lastFrameTs)lastFrameTs=ts;const dtReal=(ts-lastFrameTs)/1000;lastFrameTs=ts;if(playing&&activeRun){playbackTime+=dtReal*(parseFloat(els.speedSelect.value)||1);const endT=activeRun.samples[activeRun.samples.length-1].t;if(playbackTime>=endT){playbackTime=endT;playing=false;els.playBtn.textContent="▶ 再生";}renderAt(playbackTime);}requestAnimationFrame(animate);}

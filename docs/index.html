@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Reaction Wheel Rocking Sim</title>
-  <link rel="stylesheet" href="style.css?v=20260903-6">
+  <link rel="stylesheet" href="style.css?v=20260903-8">
 </head>
 <body>
 <main class="page">
@@ -74,15 +74,9 @@
     </div>
 
     <aside class="panel controls-panel">
-      <div class="panel-head compact"><div><h2>Peak-model controller</h2><p>Direct one-shotでは最初のzero-crossだけ入力し、その後は完全に自由減衰させます。</p></div></div>
+      <div class="panel-head compact"><div><h2>Peak-model controller</h2><p>START_KICKは最初の1回だけ。得られた最初のピーク以降は、増幅専用モードを使わず通常の目標角閉ループだけで追従します。</p></div></div>
       <div class="form-grid">
-        <label>制御モード
-          <select id="controlMode">
-            <option value="direct_one_shot" selected>Direct target one-shot（最初のZCだけ入力）</option>
-            <option value="closed_loop">Repeated half-cycle control（従来）</option>
-          </select>
-        </label>
-        <label>最初の実ピーク A₀ [deg]
+        <label>START_KICK後の最初の実ピーク A₀ [deg]
           <input id="initialPeakDeg" type="number" value="0.8" min="0.05" max="17" step="0.05">
         </label>
         <label>目標ピーク Aref [deg]
@@ -152,20 +146,17 @@
       </details>
 
       <div class="controller-explain">
-        <strong>比較する入力方式</strong>
-        <code>Direct one-shot: Qdirect = Qff(A₀→Aref), 最初のZCで1回だけ</code>
-        <code>その後: Q=0（増幅制御なし）</code>
-        <strong>Repeated mode</strong>
+        <strong>基本動作：START_KICK 1回 → 通常目標追従</strong>
+        <code>START_KICK → 最初の実ピーク A₀</code>
         <code>Afree,k+1 = F_s(Ak)</code>
-        <code>ΔEreq = U_s(Aref) − U_s(Afree)</code>
-        <code>Qff = argminQ |U_s(Afree + g_s Q) − U_s(Aref)|</code>
+        <code>Qff = max(0, (Aref − Afree) / g_s)</code>
         <code>Qcmd = max(0, Qff + I_s)</code>
         <code>I_s ← I_s + KI(Aref − Aactual)</code>
-        <p>予測で目標以上ならQ=0（ブレーキなし）。Qに人工的な上限は置きません。代わりに、gの同定範囲外は外挿警告、RW回転数は物理制約として判定します。</p>
+        <p>BUILD_UP専用の制御則はありません。Arefより振幅が小さければ通常の目標追従則が正のQを要求するため、その結果として振幅が増幅します。目標付近では必要Qが自然に小さくなります。</p>
       </div>
       <div class="actions"><button id="runBtn" class="primary" type="button">計算して先頭から表示</button></div>
       <p id="validationMsg" class="validation" role="status"></p>
-      <p class="note small">START_KICK自体は、中央の二点接触からの離脱モデルに強く依存するため、この画面では「START_KICK後に得られた最初のピーク A₀」から本制御を検証します。START_KICKは別試験として追加します。</p>
+      <p class="note small">START_KICKは実機では最初の1回だけです。中央二点接触からの離脱は微小な左右差や柔軟性に依存し、過去のstartup測定もSTART_KICK単独効率を分離できていないため、現在はSTART_KICK後に実際に得られた最初のピーク A₀を初期条件として通常閉ループを評価します。</p>
     </aside>
   </section>
 
@@ -193,6 +184,6 @@
     </div>
   </section>
 </main>
-<script src="app.js?v=20260903-7"></script>
+<script src="app.js?v=20260903-8"></script>
 </body>
 </html>
