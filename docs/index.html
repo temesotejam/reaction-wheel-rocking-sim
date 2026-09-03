@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Reaction Wheel Rocking Sim</title>
-  <link rel="stylesheet" href="style.css?v=20260903-4">
+  <link rel="stylesheet" href="style.css?v=20260903-6">
 </head>
 <body>
 <main class="page">
@@ -96,14 +96,17 @@
       <details open>
         <summary>Feed-forward + 左右別I項</summary>
         <div class="form-grid details-grid">
-          <label>g+ [deg/(mA·s)] <span class="provisional">要実機確定</span>
-            <input id="gPlus" type="number" value="0.290" min="0.001" max="5" step="0.001">
+          <label>g+ [deg/(mA·s)] <span class="provisional">動画LOO実測</span>
+            <input id="gPlus" type="number" value="0.290316" min="0.001" max="5" step="0.000001">
           </label>
-          <label>g− [deg/(mA·s)] <span class="provisional">要実機確定</span>
-            <input id="gMinus" type="number" value="0.290" min="0.001" max="5" step="0.001">
+          <label>g− [deg/(mA·s)] <span class="provisional">動画LOO実測</span>
+            <input id="gMinus" type="number" value="0.254547" min="0.001" max="5" step="0.000001">
           </label>
-          <label>g同定Q上限 [mA·s] <span class="provisional">警告のみ・制御は切らない</span>
-            <input id="qModelMaxMas" type="number" value="1.6" min="0.05" max="50" step="0.05">
+          <label>g同定Q下限 [mA·s] <span class="provisional">警告のみ</span>
+            <input id="qModelMinMas" type="number" value="0.454" min="0" max="50" step="0.001">
+          </label>
+          <label>g同定Q上限 [mA·s] <span class="provisional">警告のみ</span>
+            <input id="qModelMaxMas" type="number" value="1.197" min="0.05" max="50" step="0.001">
           </label>
           <label>KI [mA·s/deg]
             <input id="kiMasPerDeg" type="number" value="0.08" min="0" max="2" step="0.01">
@@ -124,21 +127,22 @@
         <summary>電流・ホイールモデル</summary>
         <div class="form-grid details-grid">
           <label>電流立下り τfall [ms]<input id="tauFallMs" type="number" value="73" min="1" max="500" step="1"></label>
-          <label>モータ kt [N·m/A] <span class="provisional">要実機確定</span><input id="kt" type="number" value="0.05" min="0.0001" max="1" step="0.001"></label>
-          <label>ホイール Jw [kg·m²] <span class="provisional">要実機確定</span><input id="jw" type="number" value="0.00008" min="0.000001" max="0.01" step="0.00001"></label>
-          <label>ホイール上限 [rpm]<input id="maxRpm" type="number" value="6000" min="100" max="50000" step="100"></label>
+          <label>等価モータ kt [N·m/A] <span class="provisional">実トルク整合</span><input id="kt" type="number" value="0.036" min="0.0001" max="1" step="0.001"></label>
+          <label>ホイール Jw [kg·m²] <span class="provisional">形状計算</span><input id="jw" type="number" value="0.000021" min="0.000001" max="0.01" step="0.000001"></label>
+          <label>ホイール実用上限 [rpm] <span class="provisional">実測目安</span><input id="maxRpm" type="number" value="1050" min="100" max="50000" step="50"></label>
         </div>
       </details>
 
       <details>
         <summary>機体・数値計算</summary>
         <div class="form-grid details-grid">
-          <label>質量 m [kg]<input id="massKg" type="number" value="0.1997" min="0.01" max="5" step="0.0001"></label>
-          <label>CG慣性 Icg [kg·m²]<input id="icg" type="number" value="0.00055" min="0.000001" max="0.1" step="0.00001"></label>
-          <label>粘性 c [N·m·s/rad]<input id="viscous" type="number" value="0.00012" min="0" max="0.02" step="0.00001"></label>
-          <label>クーロン摩擦 τc [N·m]<input id="coulomb" type="number" value="0.00005" min="0" max="0.01" step="0.00001"></label>
+          <label>質量 m [kg] <span class="provisional">実測</span><input id="massKg" type="number" value="0.1997" min="0.01" max="5" step="0.0001"></label>
+          <label>有効ロール慣性 Ieff [kg·m²] <span class="provisional">自由減衰周期同定</span><input id="ieff" type="number" value="0.00090" min="0.000001" max="0.1" step="0.00001"></label>
+          <label>等価粘性 c [N·m·s/rad] <span class="provisional">自由減衰同定</span><input id="viscous" type="number" value="0.00050" min="0" max="0.02" step="0.00001"></label>
+          <label>等価クーロン摩擦 τc [N·m] <span class="provisional">未分離→0</span><input id="coulomb" type="number" value="0" min="0" max="0.01" step="0.00001"></label>
           <label>積分刻み dt [ms]<input id="dtMs" type="number" value="0.2" min="0.02" max="2" step="0.02"></label>
         </div>
+        <p class="note small">既定値は過去実測へ寄せています：m=0.1997 kg、R=0.150 m、zG=0.120 m、Ieff≈0.00090 kg·m²、c≈0.00050 N·m·s/rad、Jw≈2.1e−5 kg·m²、RW実用上限≈1050 rpm。IeffはCAD慣性ではなく自由減衰周期に合わせた等価値です。</p>
       </details>
 
       <div class="controller-explain">
@@ -174,12 +178,12 @@
         <p><strong>モデル追従:</strong> 実ピークがArefへ収束するか。</p>
         <p><strong>gの妥当性:</strong> Qffだけで残る偏差をI項が吸収できるか。</p>
         <p><strong>Q指令:</strong> <code>Qcmd = max(0, Qff + I_s)</code>。人工的なQ上限では切りません。</p>
-        <p><strong>モデル信頼性:</strong> Qcmdがgの同定範囲を超えたら外挿として明示します。</p>
+        <p><strong>モデル信頼性:</strong> 非ゼロQの実測支持域は0.454–1.197 mA·s。下側・上側どちらの外挿も明示します。</p>
         <p><strong>物理限界:</strong> RW回転数上限・足裏モデル限界など、実際の制約に当たった場合にのみ制御能力不足と判定します。</p>
       </div>
     </div>
   </section>
 </main>
-<script src="app.js?v=20260903-5"></script>
+<script src="app.js?v=20260903-6"></script>
 </body>
 </html>

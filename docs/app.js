@@ -17,8 +17,8 @@
   [
     "statusBadge","motionCanvas","historyCanvas","playBtn","restartBtn","speedSelect","runBtn",
     "initialPeakDeg","targetDeg","currentMa","peakDeadbandDeg","simSeconds",
-    "gPlus","gMinus","qModelMaxMas","kiMasPerDeg","iLimitMas","predLossPlus","predLossMinus",
-    "tauFallMs","kt","jw","maxRpm","massKg","icg","viscous","coulomb","dtMs","validationMsg",
+    "gPlus","gMinus","qModelMinMas","qModelMaxMas","kiMasPerDeg","iLimitMas","predLossPlus","predLossMinus",
+    "tauFallMs","kt","jw","maxRpm","massKg","ieff","viscous","coulomb","dtMs","validationMsg",
     "liveT","liveControl","liveTheta","liveOmega","livePeak","liveNextSide","liveAFree","liveARef","liveDeltaE",
     "liveQff","liveIPlus","liveIMinus","liveQcmd","liveQactual","liveICmd","liveIActual","liveRpm","liveWheelAngle",
     "liveModelStatus","liveWheelHeadroom","liveMode","liveDecision","eventBody",
@@ -82,21 +82,22 @@
       currentMa: Math.max(1, finiteOr(parseFloat(els.currentMa.value), 300)),
       peakDeadbandDeg: Math.max(0, finiteOr(parseFloat(els.peakDeadbandDeg.value), 0.03)),
       simSeconds: clamp(finiteOr(parseFloat(els.simSeconds.value), 12), 2, 30),
-      gPlus: Math.max(1e-6, finiteOr(parseFloat(els.gPlus.value), 0.29)),
-      gMinus: Math.max(1e-6, finiteOr(parseFloat(els.gMinus.value), 0.29)),
-      qModelMaxMas: Math.max(0.001, finiteOr(parseFloat(els.qModelMaxMas.value), 1.6)),
+      gPlus: Math.max(1e-6, finiteOr(parseFloat(els.gPlus.value), 0.290316)),
+      gMinus: Math.max(1e-6, finiteOr(parseFloat(els.gMinus.value), 0.254547)),
+      qModelMinMas: Math.max(0, finiteOr(parseFloat(els.qModelMinMas.value), 0.454)),
+      qModelMaxMas: Math.max(0.001, finiteOr(parseFloat(els.qModelMaxMas.value), 1.197)),
       kiMasPerDeg: Math.max(0, finiteOr(parseFloat(els.kiMasPerDeg.value), 0.08)),
       iLimitMas: Math.max(0, finiteOr(parseFloat(els.iLimitMas.value), 0.45)),
       predLossPlus: Math.max(0.01, finiteOr(parseFloat(els.predLossPlus.value), 1.0)),
       predLossMinus: Math.max(0.01, finiteOr(parseFloat(els.predLossMinus.value), 1.0)),
       tauFall: Math.max(0.001, finiteOr(parseFloat(els.tauFallMs.value), 73) / 1000),
-      kt: Math.max(1e-7, finiteOr(parseFloat(els.kt.value), 0.05)),
-      jw: Math.max(1e-9, finiteOr(parseFloat(els.jw.value), 0.00008)),
-      maxRpm: Math.max(100, finiteOr(parseFloat(els.maxRpm.value), 6000)),
+      kt: Math.max(1e-7, finiteOr(parseFloat(els.kt.value), 0.036)),
+      jw: Math.max(1e-9, finiteOr(parseFloat(els.jw.value), 0.000021)),
+      maxRpm: Math.max(100, finiteOr(parseFloat(els.maxRpm.value), 1050)),
       mass: Math.max(0.001, finiteOr(parseFloat(els.massKg.value), 0.1997)),
-      icg: Math.max(1e-8, finiteOr(parseFloat(els.icg.value), 0.00055)),
-      viscous: Math.max(0, finiteOr(parseFloat(els.viscous.value), 0.00012)),
-      coulomb: Math.max(0, finiteOr(parseFloat(els.coulomb.value), 0.00005)),
+      ieff: Math.max(1e-8, finiteOr(parseFloat(els.ieff.value), 0.00090)),
+      viscous: Math.max(0, finiteOr(parseFloat(els.viscous.value), 0.00050)),
+      coulomb: Math.max(0, finiteOr(parseFloat(els.coulomb.value), 0.0)),
       dt: clamp(finiteOr(parseFloat(els.dtMs.value), 0.2), 0.02, 2) / 1000,
       radius: 0.150,
       innerX: 0.005,
@@ -153,16 +154,12 @@
     return p.d * Math.sin(theta);
   }
 
-  function effectiveInertia(theta, p) {
-    const a = Math.abs(theta);
-    if (a <= p.thetaInner) return p.icg + p.mass * (p.h * p.h + p.innerX * p.innerX);
-    return p.icg + p.mass * (p.radius * p.radius + p.d * p.d - 2 * p.radius * p.d * Math.cos(theta));
-  }
-
-  function inertiaDerivative(theta, p) {
-    if (Math.abs(theta) <= p.thetaInner) return 0;
-    return 2 * p.mass * p.radius * p.d * Math.sin(theta);
-  }
+  // Effective roll inertia identified from passive free-decay periods.
+  // This is deliberately an empirical Ieff, not CAD/CG inertia. The previous
+  // rigid-body Icg + translation expression could not reproduce the measured
+  // ~0.71--0.77 s periods with a physically positive Icg.
+  function effectiveInertia(theta, p) { return p.ieff; }
+  function inertiaDerivative(theta, p) { return 0; }
 
   function potential(theta, p) { return p.mass * G * deltaHeight(theta, p); }
   function rockEnergy(theta, omega, p) { return 0.5 * effectiveInertia(theta, p) * omega * omega + potential(theta, p); }
@@ -388,7 +385,7 @@
         const commandMa = qCmd > 0 ? -Math.sign(omega || nextSide) * p.currentMa : 0;
         const signedQ = Math.sign(commandMa) * qCmd;
         const pulseWidth = qCmd > 0 ? solvePulseWidthForSignedQ(signedQ, currentActualMa, commandMa, p.tauFall) : 0;
-        const modelSupported = qCmd <= p.qModelMaxMas + 1e-9;
+        const modelSupported = qCmd <= 1e-9 || (qCmd >= p.qModelMinMas - 1e-9 && qCmd <= p.qModelMaxMas + 1e-9);
         if (!modelSupported) modelExtrapolated = true;
         const wheelQHeadroom = wheelQHeadroomMas(wheelOmega, commandMa, p);
         const wheelFeasible = !Number.isFinite(wheelQHeadroom) || qCmd <= wheelQHeadroom + 1e-9;
