@@ -20,9 +20,9 @@ jobs:
         run: |
           set -e
           URL='https://temesotejam.github.io/reaction-wheel-rocking-sim/'
-          for i in $(seq 1 30); do
+          for i in $(seq 1 40); do
             html=$(curl -fsSL "$URL" || true)
-            if echo "$html" | grep -q 'app.js?v=20260903-3'; then
+            if echo "$html" | grep -q 'app.js?v=20260903-4'; then
               echo "Latest Pages HTML detected on attempt $i"
               exit 0
             fi
@@ -51,21 +51,23 @@ jobs:
             page.on('console', m => console.log('CONSOLE:', m.type(), m.text()));
             const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 120000 });
             console.log('HTTP', response && response.status());
-            console.log('TITLE', await page.title());
             console.log('SCRIPT', await page.locator('script[src]').getAttribute('src'));
-            console.log('STYLE', await page.locator('link[rel="stylesheet"]').getAttribute('href'));
-            console.log('BUTTON', await page.locator('#playBtn').textContent());
+            console.log('STATUS', await page.locator('#statusBadge').textContent());
             console.log('INITIAL_T', await page.locator('#liveT').textContent());
-            console.log('INITIAL_STATUS', await page.locator('#statusBadge').textContent());
+            console.log('INITIAL_PEAK', await page.locator('#livePeak').textContent());
             console.log('EVENT_ROWS', await page.locator('#eventBody tr').count());
+            if ((await page.locator('script[src]').getAttribute('src')) !== 'app.js?v=20260903-4') throw new Error('Wrong app asset version');
+            if ((await page.locator('#statusBadge').textContent()).trim() !== 'PEAK MODEL CONTROL') throw new Error('New controller did not initialize');
+            if (!(await page.locator('#eventBody tr').count() >= 1)) throw new Error('No half-cycle decisions were generated');
             await page.locator('#playBtn').click();
             await page.waitForTimeout(1500);
             const t1 = parseFloat(await page.locator('#liveT').textContent());
             console.log('AFTER_1P5S_T', t1);
             console.log('AFTER_1P5S_THETA', await page.locator('#liveTheta').textContent());
-            console.log('AFTER_1P5S_ICMD', await page.locator('#liveICmd').textContent());
-            console.log('AFTER_1P5S_IACTUAL', await page.locator('#liveIActual').textContent());
-            console.log('BUTTON_AFTER', await page.locator('#playBtn').textContent());
+            console.log('AFTER_1P5S_AFREE', await page.locator('#liveAFree').textContent());
+            console.log('AFTER_1P5S_QCMD', await page.locator('#liveQcmd').textContent());
+            console.log('AFTER_1P5S_IPLUS', await page.locator('#liveIPlus').textContent());
+            console.log('AFTER_1P5S_IMINUS', await page.locator('#liveIMinus').textContent());
             if (errors.length) throw new Error('Page errors: ' + errors.join(' | '));
             if (!(t1 > 0.5)) throw new Error('Playback did not advance: liveT=' + t1);
             await browser.close();
