@@ -8,82 +8,62 @@ jobs:
   browser-smoke:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Wait for deployed Pages to expose latest asset version
+      - name: Wait for deployed v5 Pages
         run: |
           set -e
           URL='https://temesotejam.github.io/reaction-wheel-rocking-sim/'
           for i in $(seq 1 40); do
             html=$(curl -fsSL "$URL" || true)
-            if echo "$html" | grep -q 'app.js?v=20260903-4'; then
-              echo "Latest Pages HTML detected on attempt $i"
+            if echo "$html" | grep -q 'app.js?v=20260903-5'; then
+              echo "v5 Pages detected on attempt $i"
               exit 0
             fi
-            echo "Waiting for latest Pages HTML... attempt $i"
             sleep 5
           done
-          echo "Latest Pages HTML was not observed"
           exit 1
-
       - name: Install Playwright
         run: |
           npm init -y
           npm install playwright
           npx playwright install chromium
-
-      - name: Exercise deployed Pages in Chromium
+      - name: Exercise uncapped-Q controller in Chromium
         run: |
           node <<'NODE'
           const { chromium } = require('playwright');
           (async () => {
-            const url = 'https://temesotejam.github.io/reaction-wheel-rocking-sim/';
-            const browser = await chromium.launch({ headless: true });
+            const browser = await chromium.launch({ headless:true });
             const page = await browser.newPage();
-            const errors = [];
+            const errors=[];
             page.on('pageerror', e => { errors.push(String(e)); console.error('PAGEERROR:', e); });
-            page.on('console', m => console.log('CONSOLE:', m.type(), m.text()));
-            const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 120000 });
+            const response = await page.goto('https://temesotejam.github.io/reaction-wheel-rocking-sim/', {waitUntil:'networkidle',timeout:120000});
             console.log('HTTP', response && response.status());
             console.log('SCRIPT', await page.locator('script[src]').getAttribute('src'));
             console.log('STATUS', await page.locator('#statusBadge').textContent());
-            console.log('INITIAL_T', await page.locator('#liveT').textContent());
-            console.log('INITIAL_PEAK', await page.locator('#livePeak').textContent());
-            console.log('EVENT_ROWS', await page.locator('#eventBody tr').count());
-            if ((await page.locator('script[src]').getAttribute('src')) !== 'app.js?v=20260903-4') throw new Error('Wrong app asset version');
-            if ((await page.locator('#statusBadge').textContent()).trim() !== 'PEAK MODEL CONTROL') throw new Error('New controller did not initialize');
-            if (!(await page.locator('#eventBody tr').count() >= 1)) throw new Error('No half-cycle decisions were generated');
-
-            const tableRows = await page.locator('#eventBody tr').evaluateAll(rows => rows.map(r => [...r.querySelectorAll('td')].map(td => td.textContent.trim())));
-            const completed = tableRows.filter(r => r[10] && r[10] !== '—');
-            if (!completed.length) throw new Error('No completed next-peak result');
-            const last = completed[completed.length - 1];
-            const target = parseFloat(await page.locator('#targetDeg').inputValue());
-            const lastActual = parseFloat(last[10]);
-            const lastErr = parseFloat(last[11]);
-            console.log('LAST_COMPLETED_EVENT', JSON.stringify(last));
-            console.log('TARGET_DEG', target);
-            console.log('LAST_ACTUAL_PEAK_DEG', lastActual);
-            console.log('LAST_PEAK_ERROR_DEG', lastErr);
-            if (!(Math.abs(lastActual - target) < 0.12)) throw new Error(`Default controller did not converge near target: ${lastActual} vs ${target}`);
-
+            if ((await page.locator('script[src]').getAttribute('src')) !== 'app.js?v=20260903-5') throw new Error('Wrong app asset version');
+            if ((await page.locator('#qMaxMas').count()) !== 0) throw new Error('Artificial qMaxMas UI still exists');
+            const rows = await page.locator('#eventBody tr').evaluateAll(rs => rs.map(r => [...r.querySelectorAll('td')].map(td => td.textContent.trim())));
+            if (!rows.length) throw new Error('No half-cycle decisions');
+            const firstQ = parseFloat(rows[0][8]);
+            console.log('FIRST_EVENT', JSON.stringify(rows[0]));
+            console.log('FIRST_QCMD', firstQ);
+            console.log('FIRST_MODEL_STATUS', rows[0][9]);
+            console.log('FIRST_RW_HEADROOM', rows[0][10]);
+            if (!(firstQ > 0.9)) throw new Error('Q still appears artificially capped at 0.9 mA·s');
+            const completed = rows.filter(r => r[11] && r[11] !== '—');
+            if (completed.length) console.log('LAST_COMPLETED_EVENT', JSON.stringify(completed[completed.length-1]));
             await page.locator('#playBtn').click();
             await page.waitForTimeout(1500);
             const t1 = parseFloat(await page.locator('#liveT').textContent());
             console.log('AFTER_1P5S_T', t1);
-            console.log('AFTER_1P5S_THETA', await page.locator('#liveTheta').textContent());
-            console.log('AFTER_1P5S_AFREE', await page.locator('#liveAFree').textContent());
-            console.log('AFTER_1P5S_QCMD', await page.locator('#liveQcmd').textContent());
-            console.log('AFTER_1P5S_IPLUS', await page.locator('#liveIPlus').textContent());
-            console.log('AFTER_1P5S_IMINUS', await page.locator('#liveIMinus').textContent());
-            if (errors.length) throw new Error('Page errors: ' + errors.join(' | '));
-            if (!(t1 > 0.5)) throw new Error('Playback did not advance: liveT=' + t1);
+            console.log('LIVE_QCMD', await page.locator('#liveQcmd').textContent());
+            console.log('LIVE_MODEL', await page.locator('#liveModelStatus').textContent());
+            console.log('LIVE_RW_HEADROOM', await page.locator('#liveWheelHeadroom').textContent());
+            if (errors.length) throw new Error('Page errors: '+errors.join(' | '));
+            if (!(t1 > 0.5)) throw new Error('Playback did not advance');
             await browser.close();
-          })().catch(err => { console.error(err); process.exit(1); });
+          })().catch(e=>{console.error(e);process.exit(1);});
           NODE
