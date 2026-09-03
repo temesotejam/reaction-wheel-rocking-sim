@@ -59,6 +59,20 @@ jobs:
             if ((await page.locator('script[src]').getAttribute('src')) !== 'app.js?v=20260903-4') throw new Error('Wrong app asset version');
             if ((await page.locator('#statusBadge').textContent()).trim() !== 'PEAK MODEL CONTROL') throw new Error('New controller did not initialize');
             if (!(await page.locator('#eventBody tr').count() >= 1)) throw new Error('No half-cycle decisions were generated');
+
+            const tableRows = await page.locator('#eventBody tr').evaluateAll(rows => rows.map(r => [...r.querySelectorAll('td')].map(td => td.textContent.trim())));
+            const completed = tableRows.filter(r => r[10] && r[10] !== '—');
+            if (!completed.length) throw new Error('No completed next-peak result');
+            const last = completed[completed.length - 1];
+            const target = parseFloat(await page.locator('#targetDeg').inputValue());
+            const lastActual = parseFloat(last[10]);
+            const lastErr = parseFloat(last[11]);
+            console.log('LAST_COMPLETED_EVENT', JSON.stringify(last));
+            console.log('TARGET_DEG', target);
+            console.log('LAST_ACTUAL_PEAK_DEG', lastActual);
+            console.log('LAST_PEAK_ERROR_DEG', lastErr);
+            if (!(Math.abs(lastActual - target) < 0.12)) throw new Error(`Default controller did not converge near target: ${lastActual} vs ${target}`);
+
             await page.locator('#playBtn').click();
             await page.waitForTimeout(1500);
             const t1 = parseFloat(await page.locator('#liveT').textContent());
