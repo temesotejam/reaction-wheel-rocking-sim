@@ -12,7 +12,7 @@
     <div>
       <p class="eyebrow">PEAK-BASED DISCRETE ENERGY CONTROL</p>
       <h1>Reaction Wheel Rocking Sim</h1>
-      <p class="lead">前回ピークを状態として保存し、自由減衰モデル <code>F_s(A_k)</code> で次ピークを先読み。zero-crossで必要Qをそのまま指令し、実ピーク誤差を左右別I項へ学習します。Qに人工的な上限は置きません。</p>
+      <p class="lead">START_KICK後の最初のピークから、目標値に必要なQを最初のzero-crossで1回だけ入れるDirect one-shotと、従来の半周期閉ループ制御を比較できます。既定はDirect one-shotです。</p>
     </div>
     <div id="statusBadge" class="badge">READY</div>
   </header>
@@ -74,8 +74,14 @@
     </div>
 
     <aside class="panel controls-panel">
-      <div class="panel-head compact"><div><h2>Peak-model controller</h2><p>1半周期を1ステップとして制御します。</p></div></div>
+      <div class="panel-head compact"><div><h2>Peak-model controller</h2><p>Direct one-shotでは最初のzero-crossだけ入力し、その後は完全に自由減衰させます。</p></div></div>
       <div class="form-grid">
+        <label>制御モード
+          <select id="controlMode">
+            <option value="direct_one_shot" selected>Direct target one-shot（最初のZCだけ入力）</option>
+            <option value="closed_loop">Repeated half-cycle control（従来）</option>
+          </select>
+        </label>
         <label>最初の実ピーク A₀ [deg]
           <input id="initialPeakDeg" type="number" value="0.8" min="0.05" max="17" step="0.05">
         </label>
@@ -146,7 +152,10 @@
       </details>
 
       <div class="controller-explain">
-        <strong>正式に採用する半周期制御則</strong>
+        <strong>比較する入力方式</strong>
+        <code>Direct one-shot: Qdirect = Qff(A₀→Aref), 最初のZCで1回だけ</code>
+        <code>その後: Q=0（増幅制御なし）</code>
+        <strong>Repeated mode</strong>
         <code>Afree,k+1 = F_s(Ak)</code>
         <code>ΔEreq = U_s(Aref) − U_s(Afree)</code>
         <code>Qff = argminQ |U_s(Afree + g_s Q) − U_s(Aref)|</code>
@@ -184,6 +193,6 @@
     </div>
   </section>
 </main>
-<script src="app.js?v=20260903-6"></script>
+<script src="app.js?v=20260903-7"></script>
 </body>
 </html>
