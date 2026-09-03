@@ -22,7 +22,7 @@ jobs:
           URL='https://temesotejam.github.io/reaction-wheel-rocking-sim/'
           for i in $(seq 1 30); do
             html=$(curl -fsSL "$URL" || true)
-            if echo "$html" | grep -q 'app.js?v=20260903-2'; then
+            if echo "$html" | grep -q 'app.js?v=20260903-3'; then
               echo "Latest Pages HTML detected on attempt $i"
               exit 0
             fi
