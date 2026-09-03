@@ -1,0 +1,62 @@
+name: Pages browser smoke test
+
+on:
+  workflow_run:
+    workflows: ["pages build and deployment"]
+    types: [completed]
+
+jobs:
+  browser-smoke:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chromium
+
+      - name: Exercise deployed Pages in Chromium
+        run: |
+          node <<'NODE'
+          const { chromium } = require('playwright');
+          (async () => {
+            const url = 'https://temesotejam.github.io/reaction-wheel-rocking-sim/';
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+            const errors = [];
+            page.on('pageerror', e => { errors.push(String(e)); console.error('PAGEERROR:', e); });
+            page.on('console', m => console.log('CONSOLE:', m.type(), m.text()));
+            const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 120000 });
+            console.log('HTTP', response && response.status());
+            console.log('TITLE', await page.title());
+            console.log('SCRIPT', await page.locator('script[src]').getAttribute('src'));
+            console.log('STYLE', await page.locator('link[rel="stylesheet"]').getAttribute('href'));
+            console.log('BUTTON', await page.locator('#playBtn').textContent());
+            console.log('INITIAL_T', await page.locator('#liveT').textContent());
+            console.log('INITIAL_STATUS', await page.locator('#statusBadge').textContent());
+            console.log('EVENT_ROWS', await page.locator('#eventBody tr').count());
+            await page.locator('#playBtn').click();
+            await page.waitForTimeout(1500);
+            const t1 = parseFloat(await page.locator('#liveT').textContent());
+            const theta1 = await page.locator('#liveTheta').textContent();
+            const cmd1 = await page.locator('#liveICmd').textContent();
+            const actual1 = await page.locator('#liveIActual').textContent();
+            console.log('AFTER_1P5S_T', t1);
+            console.log('AFTER_1P5S_THETA', theta1);
+            console.log('AFTER_1P5S_ICMD', cmd1);
+            console.log('AFTER_1P5S_IACTUAL', actual1);
+            console.log('BUTTON_AFTER', await page.locator('#playBtn').textContent());
+            if (errors.length) throw new Error('Page errors: ' + errors.join(' | '));
+            if (!(t1 > 0.5)) throw new Error('Playback did not advance: liveT=' + t1);
+            await browser.close();
+          })().catch(err => { console.error(err); process.exit(1); });
+          NODE
