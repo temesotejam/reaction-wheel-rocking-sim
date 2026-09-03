@@ -4,201 +4,180 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Reaction Wheel Rocking Sim</title>
-  <link rel="stylesheet" href="style.css?v=20260903-2">
+  <link rel="stylesheet" href="style.css?v=20260903-4">
 </head>
 <body>
-  <main class="page">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">2D CONTINUOUS ENERGY CONTROL TESTBED</p>
-        <h1>Reaction Wheel Rocking Sim</h1>
-        <p class="lead">床固定の2Dロッキング機体を、毎回のゼロクロスで状態評価しながらリアクションホイールで連続制御します。表示値はすべて再生中の同一時刻に同期します。</p>
-      </div>
-      <div id="statusBadge" class="badge">READY</div>
-    </header>
+<main class="page">
+  <header class="hero">
+    <div>
+      <p class="eyebrow">PEAK-BASED DISCRETE ENERGY CONTROL</p>
+      <h1>Reaction Wheel Rocking Sim</h1>
+      <p class="lead">前回ピークを状態として保存し、自由減衰モデル <code>F_s(A_k)</code> で次ピークを先読み。zero-crossで不足分だけQを入れ、実ピーク誤差を左右別I項へ学習します。</p>
+    </div>
+    <div id="statusBadge" class="badge">READY</div>
+  </header>
 
-    <section class="grid-main">
-      <div class="panel visual-panel">
-        <div class="panel-head">
-          <div>
-            <h2>2D motion — floor fixed</h2>
-            <p>黄色点: 接地点 / 赤点: CG。右上の値と下のLive stateは、この描画と同じ時刻です。</p>
-          </div>
-          <div class="playback-controls">
-            <button id="restartBtn" type="button">↺ 先頭</button>
-            <button id="playBtn" class="primary-small" type="button">▶ 再生</button>
-            <select id="speedSelect" aria-label="再生速度">
-              <option value="0.25">0.25×</option>
-              <option value="0.5">0.5×</option>
-              <option value="1" selected>1×</option>
-              <option value="2">2×</option>
-              <option value="4">4×</option>
-            </select>
-          </div>
-        </div>
-        <canvas id="motionCanvas" width="860" height="470"></canvas>
-
-        <div class="flow-strip" aria-label="現在の制御フロー">
-          <span id="flowDecision" class="flow-node">ZC判定</span>
-          <span>→</span>
-          <span id="flowCmd" class="flow-node">Icmd</span>
-          <span>→</span>
-          <span id="flowCurrent" class="flow-node">Iactual</span>
-          <span>→</span>
-          <span id="flowTorque" class="flow-node">τmotor</span>
-          <span>→</span>
-          <span id="flowWheel" class="flow-node">wheel</span>
-          <span>→</span>
-          <span id="flowBody" class="flow-node">body</span>
-        </div>
-
-        <div class="live-grid" aria-live="polite">
-          <article class="live-card strong"><span>time</span><strong id="liveT">0.000</strong><small>s</small></article>
-          <article class="live-card strong"><span>control</span><strong id="liveControl">COAST</strong></article>
-          <article class="live-card"><span>zero cross</span><strong id="liveZc">0</strong><small>回</small></article>
-          <article class="live-card"><span>θ body</span><strong id="liveTheta">0.00</strong><small>deg</small></article>
-          <article class="live-card"><span>ω body</span><strong id="liveOmega">0.0</strong><small>deg/s</small></article>
-          <article class="live-card"><span>E now</span><strong id="liveENow">0.000</strong><small>mJ</small></article>
-          <article class="live-card"><span>E ref</span><strong id="liveERef">0.000</strong><small>mJ</small></article>
-          <article class="live-card error"><span>ΔE need</span><strong id="liveENeed">0.000</strong><small>mJ</small></article>
-          <article class="live-card cmd"><span>I cmd</span><strong id="liveICmd">0</strong><small>mA</small></article>
-          <article class="live-card actual"><span>I actual</span><strong id="liveIActual">0.0</strong><small>mA</small></article>
-          <article class="live-card"><span>Q target</span><strong id="liveQTarget">0.000</strong><small>mA·s</small></article>
-          <article class="live-card"><span>Q actual/event</span><strong id="liveQActual">0.000</strong><small>mA·s</small></article>
-          <article class="live-card"><span>τ motor</span><strong id="liveTorque">0.0000</strong><small>N·m</small></article>
-          <article class="live-card wheel"><span>φ wheel</span><strong id="liveWheelAngle">0.0</strong><small>deg</small></article>
-          <article class="live-card wheel"><span>ω wheel</span><strong id="liveRpm">0</strong><small>rpm</small></article>
-          <article class="live-card"><span>contact</span><strong id="liveMode">—</strong></article>
-        </div>
-
-        <div class="decision-line">
-          <strong>直近ゼロクロス判断:</strong>
-          <span id="liveDecision">まだゼロクロスしていません。</span>
-        </div>
-      </div>
-
-      <aside class="panel controls-panel">
-        <div class="panel-head compact">
-          <div>
-            <h2>Continuous controller</h2>
-            <p>毎回のゼロクロスで Eref − Enow を評価します。</p>
-          </div>
-        </div>
-
-        <div class="form-grid">
-          <label>初期振幅 A₀ [deg]
-            <input id="initialDeg" type="number" value="8" min="0.5" max="17" step="0.5">
-          </label>
-          <label>目標振幅 Aref [deg]
-            <input id="targetDeg" type="number" value="10" min="0.5" max="17" step="0.5">
-          </label>
-          <label>指令電流 |Icmd| [mA]
-            <input id="currentMa" type="number" value="300" min="10" max="1000" step="10">
-          </label>
-          <label>1回のQ上限 [mA·s]
-            <input id="qMaxMas" type="number" value="3.8" min="0.1" max="10" step="0.1">
-          </label>
-          <label>エネルギー不感帯 [mJ]
-            <input id="energyDeadbandMj" type="number" value="0.015" min="0" max="1" step="0.005">
-          </label>
-          <label>シミュレーション [s]
-            <input id="simSeconds" type="number" value="12" min="2" max="30" step="1">
-          </label>
-        </div>
-
-        <details open>
-          <summary>電流・ホイールモデル</summary>
-          <div class="form-grid details-grid">
-            <label>電流立下り τfall [ms]
-              <input id="tauFallMs" type="number" value="73" min="1" max="500" step="1">
-            </label>
-            <label>モータ kt [N·m/A] <span class="provisional">要実機確定</span>
-              <input id="kt" type="number" value="0.05" min="0.0001" max="1" step="0.001">
-            </label>
-            <label>ホイール Jw [kg·m²] <span class="provisional">要実機確定</span>
-              <input id="jw" type="number" value="0.00008" min="0.000001" max="0.01" step="0.00001">
-            </label>
-            <label>ホイール上限 [rpm]
-              <input id="maxRpm" type="number" value="6000" min="100" max="50000" step="100">
-            </label>
-          </div>
-        </details>
-
-        <details>
-          <summary>機体・数値計算</summary>
-          <div class="form-grid details-grid">
-            <label>質量 m [kg]
-              <input id="massKg" type="number" value="0.1997" min="0.01" max="5" step="0.0001">
-            </label>
-            <label>CG慣性 Icg [kg·m²]
-              <input id="icg" type="number" value="0.00055" min="0.000001" max="0.1" step="0.00001">
-            </label>
-            <label>粘性 c [N·m·s/rad]
-              <input id="viscous" type="number" value="0.00012" min="0" max="0.02" step="0.00001">
-            </label>
-            <label>クーロン摩擦 τc [N·m]
-              <input id="coulomb" type="number" value="0.00005" min="0" max="0.01" step="0.00001">
-            </label>
-            <label>積分刻み dt [ms]
-              <input id="dtMs" type="number" value="0.2" min="0.02" max="2" step="0.02">
-            </label>
-          </div>
-        </details>
-
-        <div class="controller-explain">
-          <strong>ゼロクロスでの現在の制御則</strong>
-          <code>ΔE = Eref − Enow</code>
-          <code>Qneed ≈ |ΔE|·1000 / (kt·|ωcross|)</code>
-          <p>不足なら加振、過剰なら制動。不感帯内なら入力しません。Qは上限でクリップします。</p>
-        </div>
-
-        <div class="actions">
-          <button id="runBtn" class="primary" type="button">計算して先頭から表示</button>
-        </div>
-        <p id="validationMsg" class="validation" role="status"></p>
-      </aside>
-    </section>
-
-    <section class="panel history-panel">
-      <div class="panel-head compact">
+  <section class="grid-main">
+    <div class="panel visual-panel">
+      <div class="panel-head">
         <div>
-          <h2>Synchronized state history</h2>
-          <p>白い縦線が現在のアニメーション時刻。上から機体角度、エネルギー、電流、ホイール速度、ホイール角度です。</p>
+          <h2>2D motion — floor fixed</h2>
+          <p>表示値はすべてアニメーションと同じシミュレーション時刻です。</p>
+        </div>
+        <div class="playback-controls">
+          <button id="restartBtn" type="button">↺ 先頭</button>
+          <button id="playBtn" class="primary-small" type="button">▶ 再生</button>
+          <select id="speedSelect" aria-label="再生速度">
+            <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+          </select>
         </div>
       </div>
-      <canvas id="historyCanvas" width="1500" height="650"></canvas>
-    </section>
+      <canvas id="motionCanvas" width="900" height="500"></canvas>
 
-    <section class="grid-bottom">
-      <div class="panel">
-        <div class="panel-head compact">
-          <div>
-            <h2>Zero-cross decisions</h2>
-            <p>制御器が各ゼロクロスで実際に何を判断したか。最終集計ではなく、運動中のイベント列です。</p>
-          </div>
-        </div>
-        <div class="event-table-wrap">
-          <table class="event-table">
-            <thead>
-              <tr><th>#</th><th>t [s]</th><th>ωcross [deg/s]</th><th>Enow [mJ]</th><th>ΔE [mJ]</th><th>判断</th><th>Qtarget [mA·s]</th><th>ON [ms]</th></tr>
-            </thead>
-            <tbody id="eventBody"></tbody>
-          </table>
-        </div>
+      <div class="flow-strip">
+        <span id="flowPeak" class="flow-node">Peak Aₖ</span><span>→</span>
+        <span id="flowFree" class="flow-node">Fₛ(Aₖ)</span><span>→</span>
+        <span id="flowGap" class="flow-node">ΔEreq</span><span>→</span>
+        <span id="flowQ" class="flow-node">Qff + Iₛ</span><span>→</span>
+        <span id="flowCmd" class="flow-node">Icmd</span><span>→</span>
+        <span id="flowCurrent" class="flow-node">Iactual</span><span>→</span>
+        <span id="flowWheel" class="flow-node">RW/body</span><span>→</span>
+        <span id="flowActualPeak" class="flow-node">Actual peak</span>
       </div>
-      <div class="panel">
-        <h2>この画面で見るべき因果関係</h2>
-        <div class="causal-list">
-          <p><strong>1.</strong> ゼロクロスで ΔE need が評価される。</p>
-          <p><strong>2.</strong> 必要なら I cmd が ±300 mA などへ変わる。</p>
-          <p><strong>3.</strong> I actual は遅れて立ち上がり、OFF後も減衰する。</p>
-          <p><strong>4.</strong> 実電流から τmotor が生じ、wheelの速度・角度が変化する。</p>
-          <p><strong>5.</strong> 反力で機体の Enow が変わり、次のゼロクロスで再評価される。</p>
-        </div>
-        <p class="note">ここで収束しない場合は「表示の問題」ではなく、制御則・kt/Jw・損失モデル・Q近似のどこが不足しているかを次に切り分けます。</p>
+
+      <div class="live-grid" aria-live="polite">
+        <article class="live-card strong"><span>time</span><strong id="liveT">0.000</strong><small>s</small></article>
+        <article class="live-card strong"><span>control</span><strong id="liveControl">PEAK HOLD</strong></article>
+        <article class="live-card"><span>θ body</span><strong id="liveTheta">0.00</strong><small>deg</small></article>
+        <article class="live-card"><span>ω body</span><strong id="liveOmega">0.0</strong><small>deg/s</small></article>
+        <article class="live-card"><span>last peak Aₖ</span><strong id="livePeak">0.00</strong><small>deg</small></article>
+        <article class="live-card"><span>next side</span><strong id="liveNextSide">—</strong></article>
+        <article class="live-card"><span>Afree = Fₛ(Aₖ)</span><strong id="liveAFree">—</strong><small>deg</small></article>
+        <article class="live-card"><span>Aref</span><strong id="liveARef">0.00</strong><small>deg</small></article>
+        <article class="live-card error"><span>ΔE req</span><strong id="liveDeltaE">0.000</strong><small>mJ</small></article>
+        <article class="live-card"><span>Qff</span><strong id="liveQff">0.000</strong><small>mA·s</small></article>
+        <article class="live-card"><span>I+</span><strong id="liveIPlus">0.000</strong><small>mA·s</small></article>
+        <article class="live-card"><span>I−</span><strong id="liveIMinus">0.000</strong><small>mA·s</small></article>
+        <article class="live-card cmd"><span>Qcmd</span><strong id="liveQcmd">0.000</strong><small>mA·s</small></article>
+        <article class="live-card"><span>Qactual/event</span><strong id="liveQactual">0.000</strong><small>mA·s</small></article>
+        <article class="live-card cmd"><span>I cmd</span><strong id="liveICmd">0</strong><small>mA</small></article>
+        <article class="live-card actual"><span>I actual</span><strong id="liveIActual">0.0</strong><small>mA</small></article>
+        <article class="live-card wheel"><span>ω wheel</span><strong id="liveRpm">0</strong><small>rpm</small></article>
+        <article class="live-card wheel"><span>φ wheel</span><strong id="liveWheelAngle">0.0</strong><small>deg</small></article>
+        <article class="live-card capability"><span>ΔAcycle @ Qmax</span><strong id="liveCycleMargin">—</strong><small>deg</small></article>
+        <article class="live-card"><span>contact</span><strong id="liveMode">—</strong></article>
       </div>
-    </section>
-  </main>
-  <script src="app.js?v=20260903-3"></script>
+
+      <div class="decision-line"><strong>現在の判断:</strong> <span id="liveDecision">最初のピークから開始します。</span></div>
+    </div>
+
+    <aside class="panel controls-panel">
+      <div class="panel-head compact"><div><h2>Peak-model controller</h2><p>1半周期を1ステップとして制御します。</p></div></div>
+      <div class="form-grid">
+        <label>最初の実ピーク A₀ [deg]
+          <input id="initialPeakDeg" type="number" value="0.8" min="0.05" max="17" step="0.05">
+        </label>
+        <label>目標ピーク Aref [deg]
+          <input id="targetDeg" type="number" value="2.0" min="0.1" max="17" step="0.1">
+        </label>
+        <label>指令電流 |Icmd| [mA]
+          <input id="currentMa" type="number" value="300" min="10" max="1000" step="10">
+        </label>
+        <label>通常Q上限 [mA·s]
+          <input id="qMaxMas" type="number" value="0.9" min="0.05" max="10" step="0.05">
+        </label>
+        <label>ピーク不感帯 [deg]
+          <input id="peakDeadbandDeg" type="number" value="0.03" min="0" max="1" step="0.01">
+        </label>
+        <label>シミュレーション [s]
+          <input id="simSeconds" type="number" value="12" min="2" max="30" step="1">
+        </label>
+      </div>
+
+      <details open>
+        <summary>Feed-forward + 左右別I項</summary>
+        <div class="form-grid details-grid">
+          <label>g+ [deg/(mA·s)] <span class="provisional">要実機確定</span>
+            <input id="gPlus" type="number" value="0.290" min="0.001" max="5" step="0.001">
+          </label>
+          <label>g− [deg/(mA·s)] <span class="provisional">要実機確定</span>
+            <input id="gMinus" type="number" value="0.290" min="0.001" max="5" step="0.001">
+          </label>
+          <label>KI [mA·s/deg]
+            <input id="kiMasPerDeg" type="number" value="0.08" min="0" max="2" step="0.01">
+          </label>
+          <label>|Iₛ|上限 [mA·s]
+            <input id="iLimitMas" type="number" value="0.45" min="0" max="5" step="0.05">
+          </label>
+          <label>F+ 損失倍率 <span class="provisional">予測モデル</span>
+            <input id="predLossPlus" type="number" value="1.0" min="0.1" max="3" step="0.05">
+          </label>
+          <label>F− 損失倍率 <span class="provisional">予測モデル</span>
+            <input id="predLossMinus" type="number" value="1.0" min="0.1" max="3" step="0.05">
+          </label>
+        </div>
+      </details>
+
+      <details>
+        <summary>電流・ホイールモデル</summary>
+        <div class="form-grid details-grid">
+          <label>電流立下り τfall [ms]<input id="tauFallMs" type="number" value="73" min="1" max="500" step="1"></label>
+          <label>モータ kt [N·m/A] <span class="provisional">要実機確定</span><input id="kt" type="number" value="0.05" min="0.0001" max="1" step="0.001"></label>
+          <label>ホイール Jw [kg·m²] <span class="provisional">要実機確定</span><input id="jw" type="number" value="0.00008" min="0.000001" max="0.01" step="0.00001"></label>
+          <label>ホイール上限 [rpm]<input id="maxRpm" type="number" value="6000" min="100" max="50000" step="100"></label>
+        </div>
+      </details>
+
+      <details>
+        <summary>機体・数値計算</summary>
+        <div class="form-grid details-grid">
+          <label>質量 m [kg]<input id="massKg" type="number" value="0.1997" min="0.01" max="5" step="0.0001"></label>
+          <label>CG慣性 Icg [kg·m²]<input id="icg" type="number" value="0.00055" min="0.000001" max="0.1" step="0.00001"></label>
+          <label>粘性 c [N·m·s/rad]<input id="viscous" type="number" value="0.00012" min="0" max="0.02" step="0.00001"></label>
+          <label>クーロン摩擦 τc [N·m]<input id="coulomb" type="number" value="0.00005" min="0" max="0.01" step="0.00001"></label>
+          <label>積分刻み dt [ms]<input id="dtMs" type="number" value="0.2" min="0.02" max="2" step="0.02"></label>
+        </div>
+      </details>
+
+      <div class="controller-explain">
+        <strong>正式に採用する半周期制御則</strong>
+        <code>Afree,k+1 = F_s(Ak)</code>
+        <code>ΔEreq = U_s(Aref) − U_s(Afree)</code>
+        <code>Qff = argminQ |U_s(Afree + g_s Q) − U_s(Aref)|</code>
+        <code>Qcmd = clip(Qff + I_s, 0, Qmax)</code>
+        <code>I_s ← I_s + KI(Aref − Aactual)</code>
+        <p>予測で目標以上ならQ=0（ブレーキなし）。固定gが妥当かも、このシミュレーションで検証対象にします。</p>
+      </div>
+      <div class="actions"><button id="runBtn" class="primary" type="button">計算して先頭から表示</button></div>
+      <p id="validationMsg" class="validation" role="status"></p>
+      <p class="note small">START_KICK自体は、中央の二点接触からの離脱モデルに強く依存するため、この画面では「START_KICK後に得られた最初のピーク A₀」から本制御を検証します。START_KICKは別試験として追加します。</p>
+    </aside>
+  </section>
+
+  <section class="panel history-panel">
+    <div class="panel-head compact"><div><h2>Synchronized state history</h2><p>白線が現在時刻。ピーク・zero-crossイベントも同じ時間軸に重ねます。</p></div></div>
+    <canvas id="historyCanvas" width="1500" height="680"></canvas>
+  </section>
+
+  <section class="grid-bottom">
+    <div class="panel">
+      <div class="panel-head compact"><div><h2>Half-cycle decisions</h2><p>各zero-crossでの先読みと、その次の実ピーク結果。</p></div></div>
+      <div class="event-table-wrap"><table class="event-table"><thead><tr>
+        <th>#</th><th>tZC</th><th>next</th><th>Ak</th><th>Afree</th><th>ΔEreq[mJ]</th><th>Qff</th><th>I_s</th><th>Qcmd</th><th>ΔAcycle</th><th>Aactual</th><th>error</th>
+      </tr></thead><tbody id="eventBody"></tbody></table></div>
+    </div>
+    <div class="panel">
+      <h2>成立性を見る指標</h2>
+      <div class="causal-list">
+        <p><strong>モデル追従:</strong> 実ピークがArefへ収束するか。</p>
+        <p><strong>gの妥当性:</strong> Qffだけで残る偏差をI項が吸収できるか。</p>
+        <p><strong>制御能力:</strong> <code>ΔAcycle = F_s(A)+g_sQmax−A</code> が正なら最大入力で増幅可能。</p>
+        <p><strong>限界:</strong> ΔAcycle&lt;0の領域では通常制御だけでは振幅を増やせません。</p>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="app.js?v=20260903-4"></script>
 </body>
 </html>
