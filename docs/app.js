@@ -16,12 +16,12 @@
   const els = {};
   [
     "statusBadge","motionCanvas","historyCanvas","playBtn","restartBtn","speedSelect","runBtn",
-    "initialPeakDeg","targetDeg","currentMa","qMaxMas","peakDeadbandDeg","simSeconds",
-    "gPlus","gMinus","kiMasPerDeg","iLimitMas","predLossPlus","predLossMinus",
+    "initialPeakDeg","targetDeg","currentMa","peakDeadbandDeg","simSeconds",
+    "gPlus","gMinus","qModelMaxMas","kiMasPerDeg","iLimitMas","predLossPlus","predLossMinus",
     "tauFallMs","kt","jw","maxRpm","massKg","icg","viscous","coulomb","dtMs","validationMsg",
     "liveT","liveControl","liveTheta","liveOmega","livePeak","liveNextSide","liveAFree","liveARef","liveDeltaE",
     "liveQff","liveIPlus","liveIMinus","liveQcmd","liveQactual","liveICmd","liveIActual","liveRpm","liveWheelAngle",
-    "liveCycleMargin","liveMode","liveDecision","eventBody",
+    "liveModelStatus","liveWheelHeadroom","liveMode","liveDecision","eventBody",
     "flowPeak","flowFree","flowGap","flowQ","flowCmd","flowCurrent","flowWheel","flowActualPeak"
   ].forEach(id => { els[id] = document.getElementById(id); });
 
@@ -65,10 +65,9 @@
     const targetSign = Math.sign(targetSignedQMas);
     const targetMag = Math.abs(targetSignedQMas);
     const progress = w => targetSign * signedQTotalForWidth(i0Ma, commandMa, w, tauFallS);
-    let lo = 0, hi = 0.001;
-    while (progress(hi) < targetMag && hi < 0.25) hi *= 2;
-    hi = Math.min(hi, 0.25);
-    if (progress(hi) < targetMag) return hi;
+    let lo = 0, hi = 0.001, guard = 0;
+    while (progress(hi) < targetMag && guard < 80) { hi *= 2; guard++; }
+    if (!Number.isFinite(hi) || progress(hi) < targetMag) return NaN;
     for (let k = 0; k < 60; k++) {
       const mid = 0.5 * (lo + hi);
       if (progress(mid) < targetMag) lo = mid; else hi = mid;
@@ -81,11 +80,11 @@
       initialPeakDeg: Math.max(0.01, finiteOr(parseFloat(els.initialPeakDeg.value), 0.8)),
       targetDeg: Math.max(0.01, finiteOr(parseFloat(els.targetDeg.value), 2.0)),
       currentMa: Math.max(1, finiteOr(parseFloat(els.currentMa.value), 300)),
-      qMaxMas: Math.max(0.001, finiteOr(parseFloat(els.qMaxMas.value), 0.9)),
       peakDeadbandDeg: Math.max(0, finiteOr(parseFloat(els.peakDeadbandDeg.value), 0.03)),
       simSeconds: clamp(finiteOr(parseFloat(els.simSeconds.value), 12), 2, 30),
       gPlus: Math.max(1e-6, finiteOr(parseFloat(els.gPlus.value), 0.29)),
       gMinus: Math.max(1e-6, finiteOr(parseFloat(els.gMinus.value), 0.29)),
+      qModelMaxMas: Math.max(0.001, finiteOr(parseFloat(els.qModelMaxMas.value), 1.6)),
       kiMasPerDeg: Math.max(0, finiteOr(parseFloat(els.kiMasPerDeg.value), 0.08)),
       iLimitMas: Math.max(0, finiteOr(parseFloat(els.iLimitMas.value), 0.45)),
       predLossPlus: Math.max(0.01, finiteOr(parseFloat(els.predLossPlus.value), 1.0)),
@@ -222,21 +221,24 @@
   function iForSide(side, state) { return side > 0 ? state.iPlus : state.iMinus; }
 
   function qFeedForward(Afree, side, p) {
-    if (Afree >= p.targetDeg - p.peakDeadbandDeg) {
-      return { qFF: 0, eFree: potential(side * Afree * DEG, p), eRef: potential(side * p.targetDeg * DEG, p), deltaE: 0 };
-    }
     const eFree = potential(side * Afree * DEG, p);
     const eRef = potential(side * p.targetDeg * DEG, p);
+    if (Afree >= p.targetDeg - p.peakDeadbandDeg) {
+      return { qFF: 0, eFree, eRef, deltaE: 0 };
+    }
     const deltaE = eRef - eFree;
     const g = gainForSide(side, p);
-    let lo = 0, hi = p.qMaxMas;
-    for (let k = 0; k < 50; k++) {
-      const mid = 0.5 * (lo + hi);
-      const predA = Afree + g * mid;
-      const e = potential(side * predA * DEG, p);
-      if (e < eRef) lo = mid; else hi = mid;
-    }
-    return { qFF: 0.5 * (lo + hi), eFree, eRef, deltaE };
+    // U_s is monotonic in the controlled region, so the energy-matching solution
+    // is equivalent to Afree + g_s Q = Aref. No artificial upper Q cap is applied.
+    const qFF = Math.max(0, (p.targetDeg - Afree) / g);
+    return { qFF, eFree, eRef, deltaE };
+  }
+
+  function wheelQHeadroomMas(wheelOmega, commandMa, p) {
+    if (Math.abs(commandMa) < 1e-12) return Infinity;
+    const dir = Math.sign(commandMa);
+    const deltaOmega = p.maxWheelRadS - dir * wheelOmega;
+    return Math.max(0, p.jw * deltaOmega / p.kt * 1000);
   }
 
   function updateIntegralAfterPeak(event, actualPeakDeg, state, p) {
@@ -245,9 +247,9 @@
     const side = event.nextSide;
     const oldI = side > 0 ? state.iPlus : state.iMinus;
     let nextI = oldI;
-    const atHigh = event.qCmd >= p.qMaxMas - 1e-8;
     const atLow = event.qCmd <= 1e-8;
-    if (!((atHigh && err > 0) || (atLow && err < 0))) {
+    // Only the no-braking floor saturates Qcmd. There is no artificial upper Q cap.
+    if (!(atLow && err < 0)) {
       nextI = clamp(oldI + p.kiMasPerDeg * err, -p.iLimitMas, p.iLimitMas);
     }
     if (side > 0) state.iPlus = nextI; else state.iMinus = nextI;
@@ -296,7 +298,7 @@
     let lastPeakSide = +1;
     let currentDecision = null;
     let pendingEvent = null;
-    let saturated = false, invalid = false;
+    let saturated = false, invalid = false, modelExtrapolated = false;
     const state = { iPlus: 0, iMinus: 0 };
     const events = [], peaks = [{ index:1, t:0, side:+1, ampDeg:lastPeakDeg }], samples = [];
 
@@ -306,14 +308,16 @@
         wheelOmega, wheelAngle, qEventActual,
         lastPeakDeg, lastPeakSide, peakCount, zcCount,
         iPlus: state.iPlus, iMinus: state.iMinus,
-        controlState: "COAST", nextSide: 0, Afree: NaN, deltaE: 0, qFF: 0, qCmd: 0, cycleMargin: NaN,
+        controlState: "COAST", nextSide: 0, Afree: NaN, deltaE: 0, qFF: 0, qCmd: 0,
+        modelSupported: true, wheelQHeadroom: Infinity,
         decisionText: "最初のピークを現在状態として使用", mode: contactMode(theta,p)
       };
       if (currentDecision) {
         Object.assign(s, {
           controlState: Math.abs(currentCmdMa)>1e-6 ? "INPUT" : (Math.abs(currentActualMa)>p.currentTailThresholdMa ? "CURRENT TAIL" : "COAST"),
           nextSide: currentDecision.nextSide, Afree: currentDecision.Afree, deltaE: currentDecision.deltaE,
-          qFF: currentDecision.qFF, qCmd: currentDecision.qCmd, cycleMargin: currentDecision.cycleMargin,
+          qFF: currentDecision.qFF, qCmd: currentDecision.qCmd,
+          modelSupported: currentDecision.modelSupported, wheelQHeadroom: currentDecision.wheelQHeadroom,
           decisionText: currentDecision.text
         });
       }
@@ -338,13 +342,23 @@
 
       let tauMotor = p.kt * (iMid / 1000);
       const wouldIncreaseWheel = wheelOmega === 0 || Math.sign(tauMotor) === Math.sign(wheelOmega);
-      if (Math.abs(wheelOmega) >= p.maxWheelRadS && wouldIncreaseWheel) { tauMotor = 0; saturated = true; }
+      if (Math.abs(wheelOmega) >= p.maxWheelRadS && wouldIncreaseWheel) {
+        tauMotor = 0;
+        saturated = true;
+        activePulse = null;
+        if (pendingEvent) pendingEvent.actuatorLimited = true;
+      }
 
       const oldWheelOmega = wheelOmega;
       const n = rk4Body(theta, omega, tauMotor, dt, p, 1);
       theta = n.theta; omega = n.omega;
       wheelOmega += (tauMotor / p.jw) * dt;
-      if (Math.abs(wheelOmega) > p.maxWheelRadS) { wheelOmega = Math.sign(wheelOmega) * p.maxWheelRadS; saturated = true; }
+      if (Math.abs(wheelOmega) > p.maxWheelRadS) {
+        wheelOmega = Math.sign(wheelOmega) * p.maxWheelRadS;
+        saturated = true;
+        activePulse = null;
+        if (pendingEvent) pendingEvent.actuatorLimited = true;
+      }
       wheelAngle += 0.5 * (oldWheelOmega + wheelOmega) * dt;
       t += dt;
 
@@ -370,15 +384,18 @@
         const ff = qFeedForward(Afree, nextSide, p);
         const iSide = iForSide(nextSide, state);
         let qCmd = 0;
-        if (Afree < p.targetDeg - p.peakDeadbandDeg) qCmd = clamp(ff.qFF + iSide, 0, p.qMaxMas);
-        const g = gainForSide(nextSide,p);
-        const cycleMargin = Afree + g * p.qMaxMas - lastPeakDeg;
+        if (Afree < p.targetDeg - p.peakDeadbandDeg) qCmd = Math.max(0, ff.qFF + iSide);
         const commandMa = qCmd > 0 ? -Math.sign(omega || nextSide) * p.currentMa : 0;
         const signedQ = Math.sign(commandMa) * qCmd;
         const pulseWidth = qCmd > 0 ? solvePulseWidthForSignedQ(signedQ, currentActualMa, commandMa, p.tauFall) : 0;
+        const modelSupported = qCmd <= p.qModelMaxMas + 1e-9;
+        if (!modelSupported) modelExtrapolated = true;
+        const wheelQHeadroom = wheelQHeadroomMas(wheelOmega, commandMa, p);
+        const wheelFeasible = !Number.isFinite(wheelQHeadroom) || qCmd <= wheelQHeadroom + 1e-9;
         const event = {
           index: zcCount, t, nextSide, Ak:lastPeakDeg, Afree, deltaEMj:ff.deltaE*1000,
-          qFF:ff.qFF, iUsed:iSide, qCmd, pulseWidthMs:pulseWidth*1000, cycleMargin,
+          qFF:ff.qFF, iUsed:iSide, qCmd, pulseWidthMs:pulseWidth*1000,
+          modelSupported, wheelQHeadroom, wheelFeasible, actuatorLimited:false,
           actualPeakDeg:null, peakErrorDeg:null, iAfter:null
         };
         events.push(event);
@@ -386,7 +403,7 @@
         currentDecision = {
           ...event,
           text: qCmd > 0
-            ? `ZC #${zcCount}: Aₖ=${lastPeakDeg.toFixed(3)}° → Afree=${Afree.toFixed(3)}° → Qff=${ff.qFF.toFixed(3)} + I${sideText(nextSide)}=${iSide.toFixed(3)} → Qcmd=${qCmd.toFixed(3)} mA·s`
+            ? `ZC #${zcCount}: Aₖ=${lastPeakDeg.toFixed(3)}° → Afree=${Afree.toFixed(3)}° → Qff=${ff.qFF.toFixed(3)} + I${sideText(nextSide)}=${iSide.toFixed(3)} → Qcmd=${qCmd.toFixed(3)} mA·s${modelSupported ? "" : " [gモデル外挿]"}${wheelFeasible ? "" : " [RW回転数能力超過]"}`
             : `ZC #${zcCount}: Afree=${Afree.toFixed(3)}°。目標${p.targetDeg.toFixed(3)}°以上/不感帯内なのでQ=0（ブレーキなし）`
         };
         if (qCmd > 0 && pulseWidth > 0) {
@@ -400,7 +417,7 @@
       lastTheta = theta; lastOmega = omega;
     }
 
-    return { samples, events, peaks, saturated, invalid };
+    return { samples, events, peaks, saturated, invalid, modelExtrapolated };
   }
 
   function drawRotationArrow(ctx,cx,cy,r,dir,color,width=3) {
@@ -432,7 +449,7 @@
     ctx.fillStyle="#dce7f2";ctx.font="600 15px system-ui";ctx.fillText(`θ ${(s.theta*RAD2DEG).toFixed(2)}°`,20,28);ctx.font="12px system-ui";ctx.fillStyle="#91a0b1";ctx.fillText(`${prettyMode(s.mode)} / last peak ${s.lastPeakDeg.toFixed(3)}°`,20,48);
     const px=w-245,py=18;ctx.fillStyle="rgba(17,24,32,.92)";ctx.strokeStyle="#33404e";ctx.lineWidth=1;ctx.beginPath();ctx.rect(px,py,225,158);ctx.fill();ctx.stroke();
     ctx.fillStyle="#9fb0c1";ctx.fillText("PEAK-MODEL LIVE",px+12,py+18);
-    const rows=[["state",s.controlState],["Afree",Number.isFinite(s.Afree)?`${s.Afree.toFixed(3)}°`:"—"],["Qcmd",`${s.qCmd.toFixed(3)} mA·s`],["Iactual",`${s.currentActualMa.toFixed(1)} mA`],["wheel",`${rpmFromRadS(s.wheelOmega).toFixed(0)} rpm`],["ΔAcycle",Number.isFinite(s.cycleMargin)?`${s.cycleMargin.toFixed(3)}°`:"—"]];
+    const rows=[["state",s.controlState],["Afree",Number.isFinite(s.Afree)?`${s.Afree.toFixed(3)}°`:"—"],["Qcmd",`${s.qCmd.toFixed(3)} mA·s`],["Iactual",`${s.currentActualMa.toFixed(1)} mA`],["wheel",`${rpmFromRadS(s.wheelOmega).toFixed(0)} rpm`],["g model",s.modelSupported?"IN RANGE":"EXTRAPOLATION"]];
     rows.forEach((row,i)=>{const y=py+42+i*19;ctx.fillStyle="#8fa1b3";ctx.fillText(row[0],px+12,y);ctx.fillStyle="#e7f1fb";ctx.fillText(row[1],px+82,y);});
   }
 
@@ -453,7 +470,9 @@
     els.liveIPlus.textContent=s.iPlus.toFixed(3);els.liveIMinus.textContent=s.iMinus.toFixed(3);els.liveQcmd.textContent=s.qCmd.toFixed(3);
     els.liveQactual.textContent=s.qEventActual.toFixed(3);els.liveICmd.textContent=s.currentCmdMa.toFixed(0);els.liveIActual.textContent=s.currentActualMa.toFixed(1);
     els.liveRpm.textContent=rpmFromRadS(s.wheelOmega).toFixed(0);els.liveWheelAngle.textContent=(s.wheelAngle*RAD2DEG).toFixed(1);
-    els.liveCycleMargin.textContent=Number.isFinite(s.cycleMargin)?s.cycleMargin.toFixed(3):"—";els.liveMode.textContent=prettyMode(s.mode);els.liveDecision.textContent=s.decisionText;updateFlow(s);
+    els.liveModelStatus.textContent=s.modelSupported?"IN RANGE":"EXTRAPOLATION";
+    els.liveWheelHeadroom.textContent=Number.isFinite(s.wheelQHeadroom)?s.wheelQHeadroom.toFixed(1):"∞";
+    els.liveMode.textContent=prettyMode(s.mode);els.liveDecision.textContent=s.decisionText;updateFlow(s);
   }
 
   function chartRow(ctx,w,h,row,rowCount,label,min,max,series,cursorT,xMax,events,peaks) {
@@ -470,7 +489,7 @@
     const a=run.samples,xMax=a[a.length-1].t||1,thetaMax=Math.max(p.targetDeg+1,...a.map(s=>Math.abs(s.theta*RAD2DEG)));
     chartRow(ctx,w,h,0,5,"θ body [deg]",-thetaMax,thetaMax,[{data:a,value:s=>s.theta*RAD2DEG,color:"#68a8ff"},{data:a,value:()=>p.targetDeg,color:"#7ee0b8",dash:[5,4],width:1},{data:a,value:()=>-p.targetDeg,color:"#7ee0b8",dash:[5,4],width:1}],currentT,xMax,run.events,run.peaks);
     const iMax=Math.max(p.currentMa*1.05,...a.map(s=>Math.abs(s.currentActualMa)*1.1),10);chartRow(ctx,w,h,1,5,"Current [mA]",-iMax,iMax,[{data:a,value:s=>s.currentCmdMa,color:"#91a0b1",dash:[5,4],width:1.3},{data:a,value:s=>s.currentActualMa,color:"#7ee0b8"}],currentT,xMax,run.events,run.peaks);
-    const qMax=Math.max(p.qMaxMas,.1);chartRow(ctx,w,h,2,5,"Q cmd [mA·s]",0,qMax*1.15,[{data:a,value:s=>s.qCmd,color:"#ffd166"},{data:a,value:s=>s.qFF,color:"#ff9b72",dash:[4,3],width:1.2}],currentT,xMax,run.events,run.peaks);
+    const qMax=Math.max(.1,...a.map(s=>Math.max(s.qCmd,s.qFF)*1.1));chartRow(ctx,w,h,2,5,"Q cmd [mA·s]",0,qMax,[{data:a,value:s=>s.qCmd,color:"#ffd166"},{data:a,value:s=>s.qFF,color:"#ff9b72",dash:[4,3],width:1.2}],currentT,xMax,run.events,run.peaks);
     const iLim=Math.max(p.iLimitMas,.05);chartRow(ctx,w,h,3,5,"I+ / I− [mA·s]",-iLim*1.1,iLim*1.1,[{data:a,value:s=>s.iPlus,color:"#68a8ff"},{data:a,value:s=>s.iMinus,color:"#b58cff"}],currentT,xMax,run.events,run.peaks);
     const rpmAbs=Math.max(100,...a.map(s=>Math.abs(rpmFromRadS(s.wheelOmega))));chartRow(ctx,w,h,4,5,"ω wheel [rpm]",-rpmAbs*1.1,rpmAbs*1.1,[{data:a,value:s=>rpmFromRadS(s.wheelOmega),color:"#b58cff"}],currentT,xMax,run.events,run.peaks);
     ctx.fillStyle="#92a2b3";ctx.font="11px system-ui";for(let k=0;k<=6;k++){const tt=xMax*k/6,x=72+(tt/xMax)*(w-90);ctx.fillText(tt.toFixed(1),x-8,h-7);}ctx.fillText("time [s]",w-62,h-7);
@@ -480,14 +499,14 @@
     els.eventBody.innerHTML="";
     events.forEach(e=>{
       const tr=document.createElement("tr");
-      const vals=[e.index,e.t.toFixed(3),sideText(e.nextSide),e.Ak.toFixed(3),e.Afree.toFixed(3),e.deltaEMj.toFixed(4),e.qFF.toFixed(3),e.iUsed.toFixed(3),e.qCmd.toFixed(3),e.cycleMargin.toFixed(3),e.actualPeakDeg==null?"—":e.actualPeakDeg.toFixed(3),e.peakErrorDeg==null?"—":e.peakErrorDeg.toFixed(3)];
+      const vals=[e.index,e.t.toFixed(3),sideText(e.nextSide),e.Ak.toFixed(3),e.Afree.toFixed(3),e.deltaEMj.toFixed(4),e.qFF.toFixed(3),e.iUsed.toFixed(3),e.qCmd.toFixed(3),e.modelSupported?"IN":"EXTRAP",Number.isFinite(e.wheelQHeadroom)?e.wheelQHeadroom.toFixed(1):"∞",e.actualPeakDeg==null?"—":e.actualPeakDeg.toFixed(3),e.peakErrorDeg==null?"—":e.peakErrorDeg.toFixed(3)];
       vals.forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td);});els.eventBody.appendChild(tr);
     });
   }
 
   function sampleAtTime(samples,t) {if(!samples.length)return null;if(t<=samples[0].t)return samples[0];if(t>=samples[samples.length-1].t)return samples[samples.length-1];let lo=0,hi=samples.length-1;while(hi-lo>1){const mid=(lo+hi)>>1;if(samples[mid].t<t)lo=mid;else hi=mid;}return Math.abs(samples[lo].t-t)<Math.abs(samples[hi].t-t)?samples[lo]:samples[hi];}
 
-  function setStatus(run) {let text="PEAK MODEL CONTROL",color="#7ee0b8";if(run.invalid){text="MODEL LIMIT";color="#ff7474";}else if(run.saturated){text="WHEEL LIMIT";color="#ffd166";}els.statusBadge.textContent=text;els.statusBadge.style.color=color;els.statusBadge.style.borderColor=color;}
+  function setStatus(run) {let text="PEAK MODEL CONTROL",color="#7ee0b8";if(run.invalid){text="MODEL LIMIT";color="#ff7474";}else if(run.saturated){text="WHEEL LIMIT";color="#ffd166";}else if(run.modelExtrapolated){text="MODEL EXTRAPOLATION";color="#ffd166";}els.statusBadge.textContent=text;els.statusBadge.style.color=color;els.statusBadge.style.borderColor=color;}
   function renderAt(t){if(!activeRun||!activeParams)return;const s=sampleAtTime(activeRun.samples,t);drawMotion(s,activeParams);updateLive(s,activeParams);drawHistory(activeRun,t,activeParams);renderEvents(activeRun.events);}
   function runMain(){const p=readParams(),msgs=validateParams(p);els.validationMsg.textContent=msgs.join(" ");if(msgs.some(m=>m.startsWith("最初のピーク")||m.startsWith("目標ピーク")))return;activeParams=p;activeRun=simulatePeakController(p);playbackTime=0;playing=false;els.playBtn.textContent="▶ 再生";setStatus(activeRun);renderAt(0);}
   function animate(ts){if(!lastFrameTs)lastFrameTs=ts;const dtReal=(ts-lastFrameTs)/1000;lastFrameTs=ts;if(playing&&activeRun){playbackTime+=dtReal*(parseFloat(els.speedSelect.value)||1);const endT=activeRun.samples[activeRun.samples.length-1].t;if(playbackTime>=endT){playbackTime=endT;playing=false;els.playBtn.textContent="▶ 再生";}renderAt(playbackTime);}requestAnimationFrame(animate);}
